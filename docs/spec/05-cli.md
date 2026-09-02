@@ -65,7 +65,7 @@ launches a TUI into a pipe is a hang, and hangs are worse than errors. This mirr
 | `HERDR_CRON_TRIGGER` | Sets the run-trigger provenance recorded by `run-once`; one of `scheduler`, `manual`, `catchup`, `retry`, `startup`. Defaults to `manual`. Generated OS-scheduler entries set it to `scheduler` so their runs are not misfiled as hand-invoked ([`02-architecture.md`](02-architecture.md) §2.1, §4.3). |
 | `HERDR_BIN_PATH` | Path to the `herdr` binary, checked before `PATH` ([`07-herdr-integration.md`](07-herdr-integration.md) §1). |
 | `HERDR_ENV` | Set to `1` by Herdr inside a managed pane; herdr-cron uses it only to decide whether the plugin front door is available. |
-| `HERDR_PLUGIN_STATE_DIR` | When running as a Herdr plugin, MUST be used as the state root (`04-storage.md` §1). |
+| `HERDR_PLUGIN_STATE_DIR` | Ignored. Corrected 2026-09-02: honouring it gave the plugin-started daemon a different state root — and therefore a different `daemon.lock` — from a terminal-started one, so both ran at once and every job fired twice (`04-storage.md` §1). |
 | `HERDR_CRON_DEBUG` | `1` adds a stack trace to `internal` errors. |
 | `NO_COLOR` | Disables colour in `-o text`. |
 

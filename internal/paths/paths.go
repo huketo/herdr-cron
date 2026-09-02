@@ -23,7 +23,7 @@ type Overrides struct {
 }
 
 // Resolve applies the precedence of docs/spec/04-storage.md §1:
-// flags, then HERDR_CRON_*, then HERDR_PLUGIN_STATE_DIR, then XDG_*, then the per-OS defaults.
+// flags, then HERDR_CRON_*, then XDG_*, then the per-OS defaults.
 func Resolve(ov Overrides) (Roots, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -38,11 +38,27 @@ func Resolve(ov Overrides) (Roots, error) {
 	if v := os.Getenv("XDG_STATE_HOME"); v != "" {
 		state = filepath.Join(v, appName)
 	}
-	// A plugin install must keep durable state out of HERDR_PLUGIN_ROOT, which is replaced
-	// wholesale on every update.
-	if v := os.Getenv("HERDR_PLUGIN_STATE_DIR"); v != "" {
-		state = v
-	}
+	// HERDR_PLUGIN_STATE_DIR is deliberately NOT consulted.
+	//
+	// Herdr sets it for plugin-private state, and 04-storage.md §1 originally
+	// required it as the state root so that nothing durable would live under
+	// HERDR_PLUGIN_ROOT, which Herdr replaces wholesale on every update. The
+	// premise is right; the conclusion was wrong. The default state root is
+	// already outside HERDR_PLUGIN_ROOT, so honouring the variable bought
+	// nothing — and it cost the single-instance guarantee.
+	//
+	// Observed on 2026-09-02: the daemon started by the [[startup]] hook
+	// resolved ~/.local/state/herdr/plugins/huketo.herdr-cron while a daemon
+	// started from a terminal resolved ~/.local/state/herdr-cron. Both read
+	// the same jobs.yaml. daemon.lock lives in the state root, so each held its
+	// own lock, both were live at once, and every occurrence of a 15-second job
+	// executed twice. For a kind: agent job that is two agent runs and two
+	// bills per occurrence — the exact failure this project exists to prevent.
+	//
+	// The state root must be a function of the machine, never of which front
+	// door started the process: D4 says both front doors are the same binary
+	// over the same on-disk state. A plugin that genuinely needs a private
+	// root can still pass --state-dir or set HERDR_CRON_STATE_DIR.
 	if v := os.Getenv("HERDR_CRON_HOME"); v != "" {
 		cfg = filepath.Join(v, "config")
 		state = filepath.Join(v, "state")
