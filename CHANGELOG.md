@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/huketo/herdr-cron/compare/v0.1.1...v0.1.2) (2026-09-02)
+
+
+### Bug fixes
+
+* **cli:** report the real daemon state in job list ([0adad63](https://github.com/huketo/herdr-cron/commit/0adad63290c63ac5894b32c17d15383f3d85f85e))
+
 ## [0.1.1](https://github.com/huketo/herdr-cron/compare/v0.1.0...v0.1.1) (2026-09-02)
 
 
