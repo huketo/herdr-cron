@@ -165,6 +165,23 @@ The release workflow needs no secret beyond the built-in `GITHUB_TOKEN`. There i
 Homebrew tap and no Scoop bucket: the archives on the Releases page, `go install`, and
 the Herdr plugin are the three distribution channels.
 
+### The release PR's checks are red, and that is expected
+
+`CI` and `Commitlint` never run on a release PR. `release-please` authors it with the
+built-in `GITHUB_TOKEN`, and GitHub creates the resulting `pull_request` runs in an
+**approval-required** state that nobody approves, so they sit until the merge finalises
+them as failures with zero jobs and no logs. A red X there means *never ran*, not
+*failed*; the absence of logs is how to tell them apart. Do not go looking for the lint
+rule that rejected `chore(main): release X.Y.Z` — `commitlint.config.mjs` ignores that
+subject by design.
+
+Merge the release PR anyway. The push-event `CI` and `Commitlint` runs on `main` cover
+the release commit one commit later, including `internal/cli/release_test.go`, which is
+what would catch a version bump that left the three `release-please`-owned version
+literals disagreeing. See
+[ADR-0004](docs/adr/0004-release-pr-checks-are-never-approved.md) for the evidence and
+for why `main` must stay free of required status checks while this holds.
+
 ### Where the version lives
 
 Four places, and only one of them is hand-editable:
