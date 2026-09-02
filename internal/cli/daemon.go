@@ -199,6 +199,18 @@ func daemonState(roots paths.Roots) daemonStatusFull {
 	return s
 }
 
+// daemonBrief is the two-field projection carried by payloads whose subject is
+// the jobs, not the scheduler — `job_list` (docs/spec/05-cli.md §3.1).
+//
+// It delegates rather than re-deriving, so `job list` and `status` can never
+// disagree about whether a daemon is up. They did: `job list` shipped a
+// hardcoded "stopped", so an agent deciding whether `job run` would work was
+// told "no daemon" while one was running and answering triggers.
+func daemonBrief(roots paths.Roots) daemonStatus {
+	full := daemonState(roots)
+	return daemonStatus{Status: full.Status, PID: full.PID}
+}
+
 func statusCmd(g *globals) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
