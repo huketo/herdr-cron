@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/huketo/herdr-cron/compare/v0.1.2...v0.1.3) (2026-09-02)
+
+
+### Bug fixes
+
+* **tui:** size panes per screen so every pane scrolls ([#5](https://github.com/huketo/herdr-cron/issues/5)) ([2d594b8](https://github.com/huketo/herdr-cron/commit/2d594b858ad63698579204b17e166c2ab2ec9b02))
+
 ## [0.1.2](https://github.com/huketo/herdr-cron/compare/v0.1.1...v0.1.2) (2026-09-02)
 
 
