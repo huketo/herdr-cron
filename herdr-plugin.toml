@@ -16,7 +16,7 @@
 id = "huketo.herdr-cron"
 name = "herdr-cron"
 # release-please owns this line via the `$.version` extra-files jsonpath, which
-# is why it must stay a top-level key. 0.0.0 = not released yet.
+# is why it must stay a top-level key rather than moving under a table.
 version = "0.0.0"
 # The floor is the version the headless orchestration path was probed against;
 # every claim in docs/spec/07-herdr-integration.md rests on it.

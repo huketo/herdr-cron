@@ -31,9 +31,11 @@ type BuildInfo struct {
 // compute `-X main.version=$(git describe)`, and Herdr clones without tags so
 // the toolchain cannot infer one either.
 //
-// 0.0.0 means "not released yet". The first release-please PR bumps all three
-// sites that carry this number — this constant, herdr-plugin.toml, and
-// .release-please-manifest.json — to 0.1.0 together.
+// Three files carry this number and release-please moves all three together:
+// this constant, the top-level `version` in herdr-plugin.toml, and
+// .release-please-manifest.json. A test asserts they agree, because a
+// mismatch means an annotation stopped matching and every plugin build now
+// reports a version it is not.
 const fallbackVersion = "0.0.0" // x-release-please-version
 
 // devVersion is what main.go carries when no linker stamp was applied.
