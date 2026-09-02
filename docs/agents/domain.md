@@ -20,7 +20,8 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 ├── docs/adr/
 │   ├── 0001-run-once-core-with-three-drivers.md
 │   ├── 0002-files-only-ipc.md
-│   └── 0003-agent-skill-distribution.md
+│   ├── 0003-agent-skill-distribution.md
+│   └── 0004-release-pr-checks-are-never-approved.md
 ├── docs/spec/          normative — read README.md first
 ├── docs/research/      evidence — primary sources, pinned
 ├── internal/
