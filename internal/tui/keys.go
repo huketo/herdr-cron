@@ -62,7 +62,9 @@ func DefaultKeyMap() KeyMap {
 // always among them, since they are the only way out of a frame where the mouse is dead
 // (docs/spec/06-tui.md §5).
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Open, k.Back, k.ToggleEnabled, k.RunNow, k.MouseMode, k.Help, k.Quit}
+	return []key.Binding{
+		k.Up, k.NextPane, k.Open, k.Back, k.ToggleEnabled, k.RunNow, k.MouseMode, k.Help, k.Quit,
+	}
 }
 
 // FullHelp implements help.KeyMap for the `?` expansion, one column group per concern:

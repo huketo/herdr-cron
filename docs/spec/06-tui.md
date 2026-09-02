@@ -48,6 +48,10 @@ Hit testing is `lipgloss.NewLayer` + `lipgloss.NewCompositor` + `Compositor.Hit`
 `bubbles/list` MUST NOT be used (keyboard-only, no wheel path, [R] §4.2) and `lrstanley/bubblezone` MUST NOT be
 added ([R] §2.3 C).
 
+`table` is struck from that list by the second correction in §2: the job and run lists are
+herdr-cron's own `internal/tui/list.go`, and `viewport`, `help` and `key` are the widgets the TUI
+actually uses.
+
 These v1 names do not exist in v2 and MUST NOT appear in herdr-cron source, tests, or docs:
 `github.com/charmbracelet/bubbletea` (the v1 module path), `tea.WithAltScreen`,
 `tea.WithMouseCellMotion`, `tea.EnterAltScreen`, `tea.ExitAltScreen`,
@@ -75,6 +79,12 @@ hit result. `table.View()` is `m.headersView() + "\n" + m.viewport.View()`, one 
 the body, and `SetHeight` subtracts that header, so the **total** height is passed and row
 arithmetic MUST account for the line: `row = mouse.Y - bounds.Min.Y - 1` then `SetCursor`, and
 `MoveUp(3)`/`MoveDown(3)` on a wheel message ([R] §4.1).
+
+All of that reasoning about `table` stands; its conclusion changed, because the widget's own
+bookkeeping is unreadable from outside (§2, second correction item 4). `rowList` renders one header
+line above its window, so the row arithmetic is unchanged — `row = mouse.Y - rect.Min.Y - 2`, the
+border and the header line — except that the origin is now `rowList.Top()`, an index the widget
+publishes, and a wheel event is `Move(±3)`.
 
 ## 2. Screens
 
@@ -106,6 +116,47 @@ A second, smaller correction: **`table.SetWidth` is mandatory.** The widget's in
 defaults to zero width, and without it `View()` returns the header line and nothing else — three
 rows present, none visible. Columns must also be budgeted at `Width + 2` each, because the default
 cell style pads one cell either side; overflow wraps the header and collapses the layout.
+
+**CORRECTION, second round, verified by implementation on 2026-09-02.** Six more assumptions above
+are false, and every one of them produced a pane that looked finished and could not be read. The
+screens, layer ids, z ordering and precedence rules are unchanged; what follows replaces the
+mechanism.
+
+1. **`Style.Width` and `Style.Height` include the border**, not just the content
+   (`[LG set.go:283-297]`, "your styled content will exactly equal the size set here"). Measured:
+   `styleBorder.Width(10).Height(4)` renders 10 cells wide, wrapping its content at 8. A pane
+   therefore MUST be styled `Width(rect.Dx())` and the widget inside it sized `rect.Dx()-2`. The
+   first implementation subtracted the border twice, so every pane fell short of its slot and the
+   frame never reached the right edge of the terminal.
+2. **`Height` only pads; it never shrinks, and `MaxHeight` clips the bottom border away.** A widget
+   taller than its pane is therefore invisible past the fold *and* costs the pane its bottom edge —
+   which is why screen 2 rendered two panes with no bottom border.
+3. **Widget geometry is per-screen and one function MUST own it.** `panes()` returns the active
+   screen's two pane rectangles; `layout()` sizes the widgets from them, the render functions draw
+   the boxes from them, and the hit table is built from them. Sized once for screen 1, the detail
+   viewport kept a third of the width on screen 2 (wrapping Korean prose at 70 cells inside a
+   220-cell pane) and stayed twice as tall as the box that drew it — so it reported every line as
+   visible and **no key and no wheel event scrolled anything**. That is the whole of the reported
+   "arrow keys, pgup/pgdn and the wheel do nothing".
+4. **`bubbles/table` MUST NOT be used** either, for two reasons of the same kind as §4.2's against
+   `bubbles/list`. Its `Update` keeps a private `start`/`end` window plus an internal viewport
+   offset (`[BB table/table.go:264-283, 355-390]`), so the index of its first visible row cannot be
+   read back — and without that index a row hit rectangle is wrong the moment the list scrolls. And
+   it styles the cursor row by wrapping the joined cells in one style
+   (`[BB table/table.go:431-449]`), which the ANSI reset inside any coloured cell terminates: the
+   cursor row was highlighted for its first cell and plain for the rest, so pressing `↓` looked like
+   nothing had happened. `internal/tui/list.go` owns the window, the cursor and the cell rendering;
+   a cell is plain text plus a style, and the cursor band is inherited into each cell style so it is
+   continuous and keeps every cell's own colour.
+5. **Prose MUST be wrapped before it reaches a viewport.** `viewport.SoftWrap` defaults to false and
+   the widget then *cuts* each line at the pane width (`[BB viewport/viewport.go:352-364]`), which
+   silently hides the tail of every long line; with soft wrap on it breaks mid-word. The definition
+   and output panes are wrapped with `lipgloss.Style.Width` at the pane's inner width, which also
+   makes the viewport's line count the real line count its scroll arithmetic works from.
+6. **Every scrollable pane MUST carry a scroll-hint row** as its last inner row: `▲ <percent> ▼`
+   for a viewport, `▲ <first>-<last>/<total> ▼` for a list, and nothing at all when the content
+   fits. A pane holding more than it shows is otherwise indistinguishable from a pane with nothing
+   more to show, which is what makes a reader conclude the keys are dead.
 
 ### 2.1 Screen 1 — Job list (root, two-pane)
 
@@ -420,6 +471,14 @@ One `KeyMap` struct of `key.Binding` values built with
 
 `ctrl+c` MUST be bound explicitly — in raw mode `^C` arrives as a key event, not a signal — and a
 suspend binding MUST NOT be advertised, since `suspendSupported` is `false` on Windows ([R] §6.2).
+
+**Movement is routed, not delegated.** `Up`/`Down`/`PageUp`/`PageDown`/`Top`/`Bottom` MUST be
+applied by the model to the pane that holds keyboard focus, never handed to a widget's own bindings:
+a widget default would otherwise shadow one of these (`viewport`'s `d`/`u` half-page against
+`Delete`), and the pane whose border is highlighted must be the pane the keys move. `NextPane`
+(`tab`) is what moves that focus, and it is mandatory, not decorative — the second pane of every
+screen is otherwise unreachable from the keyboard, which is how the job detail beside the list came
+to be unscrollable while `tab` was already advertised in the help bar.
 
 **Help-bar rendering.** `pane.help` renders `help.Model.View(km)` after `SetWidth(m.width)`; short
 help is one line, `?` expands to full help. Inapplicable bindings MUST be disabled with

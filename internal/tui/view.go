@@ -2,12 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"image"
 	"strings"
 	"time"
 
-	"image"
-
-	"charm.land/bubbles/v2/table"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -18,112 +17,189 @@ import (
 
 const (
 	headerRows = 1
-	footerRows = 1
 	minWidth   = 40
+	// borderSize is the rounded border of a pane: one cell on each side. In lipgloss v2
+	// Style.Width and Style.Height are the whole block, border included
+	// (`[LG set.go:283-297]`), so a widget must be sized to its pane minus this or the
+	// border is what gets clipped.
+	borderSize = 2
+	// hintRows is the scroll indicator every scrollable pane carries as its last row.
+	hintRows  = 1
+	wheelStep = 3
 )
 
-// layout re-sizes every widget from the current terminal size. All measurement goes
-// through lipgloss (docs/spec/06-tui.md §7.1).
+// ---------------------------------------------------------------- geometry
+
+// paneLayout is the geometry of the active screen: the rows its breadcrumb bar occupies
+// and the two framed panes below it, as body-relative outer rectangles.
+//
+// One function owns these numbers and three consumers read them: layout sizes the
+// widgets, the render functions draw the boxes, and the same rectangles become the hit
+// table. Computed three times independently, they disagreed: the definition pane
+// inherited the job list's viewport, so a full-width pane wrapped its text at a third of
+// its width, and the viewport stayed twice as tall as the box — it reported every line as
+// visible, so no key and no wheel event scrolled, while the box clipped the rows below
+// the fold away. The pane looked complete and was unreachable.
+type paneLayout struct {
+	bar           int
+	first, second image.Rectangle
+}
+
+// panes computes the active screen's geometry from the terminal size alone.
+func (m *Model) panes() paneLayout {
+	bodyH := m.bodyHeight()
+	switch m.screen {
+	case screenJobs:
+		listW := m.listWidth()
+		return paneLayout{
+			first:  image.Rect(0, 0, listW, bodyH),
+			second: image.Rect(listW, 0, m.width, bodyH),
+		}
+	case screenDetail:
+		// The breadcrumb and the action buttons own the first body row.
+		defH := clampInt((bodyH-1)*55/100, 3, maxInt(3, bodyH-1-3))
+		return paneLayout{
+			bar:    1,
+			first:  image.Rect(0, 1, m.width, 1+defH),
+			second: image.Rect(0, 1+defH, m.width, bodyH),
+		}
+	default:
+		half := m.width / 2
+		return paneLayout{
+			bar:    1,
+			first:  image.Rect(0, 1, half, bodyH),
+			second: image.Rect(half, 1, m.width, bodyH),
+		}
+	}
+}
+
+// innerSize is the space inside a pane's border.
+func innerSize(r image.Rectangle) (int, int) {
+	return maxInt(1, r.Dx()-borderSize), maxInt(1, r.Dy()-borderSize)
+}
+
+// layout re-sizes the widgets of the active screen from the current terminal size. All
+// measurement goes through lipgloss (docs/spec/06-tui.md §7.1).
 func (m *Model) layout() {
 	if m.width < minWidth {
 		m.width = minWidth
 	}
-	helpRows := 1
-	if m.showFullHelp {
-		helpRows = 5
+	p := m.panes()
+	switch m.screen {
+	case screenJobs:
+		sizeList(&m.jobs, p.first, jobColumns)
+		sizeViewport(&m.detail, p.second)
+	case screenDetail:
+		sizeViewport(&m.detail, p.first)
+		sizeList(&m.runs, p.second, runColumns)
+	default:
+		sizeList(&m.runs, p.first, runColumns)
+		sizeViewport(&m.output, p.second)
 	}
-	body := m.height - headerRows - footerRows - helpRows
-	if body < 5 {
-		body = 5
-	}
-
-	listWidth := m.width * 62 / 100
-	detailWidth := m.width - listWidth - 1
-	if detailWidth < 16 {
-		detailWidth = 16
-		listWidth = m.width - detailWidth - 1
-	}
-
-	// table.SetHeight takes the total, header line included. SetWidth is mandatory: the
-	// widget's internal viewport defaults to zero width and then renders the header and
-	// nothing else — three rows present, none visible.
-	m.jobs.SetHeight(body - 2)
-	m.jobs.SetWidth(listWidth - 2)
-	m.jobs.SetColumns(jobColumns(listWidth - 2))
-
-	// Every pane's inner size is its box minus the border, so JoinHorizontal does not
-	// pad one column taller than its neighbour.
-	m.detail.SetWidth(detailWidth - 2)
-	m.detail.SetHeight(body - 2)
-
-	m.runs.SetHeight(body/2 - 2)
-	m.runs.SetWidth(m.width - 2)
-	m.runs.SetColumns(runColumns(m.width - 2))
-
-	m.output.SetWidth(m.width/2 - 2)
-	m.output.SetHeight(body - 3)
-
 	m.help.SetWidth(m.width)
+
+	// Rows are rendered at the column widths just computed, so the content is rebuilt
+	// here rather than left one layout behind.
+	m.syncJobs()
+	if m.screen != screenJobs {
+		m.syncRuns()
+	}
 }
 
-// jobColumns fits the columns into w cells. The table's cell style pads one cell either
-// side, so every column costs Width+2 and the budget must account for it or the header
-// wraps and the layout collapses.
-func jobColumns(w int) []table.Column {
-	const columnCount = 6
-	name := w - (2 + 16 + 11 + 8 + 2) - columnCount*2
-	if name < 8 {
-		name = 8
+// sizeList gives a list the pane's inner size less its scroll-hint row.
+func sizeList(l *rowList, r image.Rectangle, fit func(int) []column) {
+	w, h := innerSize(r)
+	l.SetColumns(fit(w))
+	l.SetSize(w, maxInt(1, h-hintRows))
+}
+
+// sizeViewport gives a viewport the pane's inner size less its scroll-hint row. A
+// viewport sized taller than the box that draws it believes its content is fully visible,
+// and then neither a key nor the wheel moves it.
+func sizeViewport(v *viewport.Model, r image.Rectangle) {
+	w, h := innerSize(r)
+	v.SetWidth(w)
+	v.SetHeight(maxInt(1, h-hintRows))
+}
+
+// jobColumns fits the list columns into exactly w cells. Each cell is rendered at its
+// column width, padding included (renderCell), so the widths must sum to w or the header
+// wraps and the layout collapses. The name column takes what is left; when that is too
+// little to read, the optional columns are shed one at a time.
+func jobColumns(w int) []column {
+	const glyph, run = 4, 4
+	sched, next, last := 18, 13, 10
+	name := func() int { return w - glyph - run - sched - next - last }
+	for _, optional := range []*int{&sched, &last, &next} {
+		if name() >= 12 {
+			break
+		}
+		*optional = 0
 	}
-	cols := []table.Column{
-		{Title: "", Width: 2},
-		{Title: "job", Width: name},
-		{Title: "schedule", Width: 16},
-		{Title: "next run", Width: 11},
-		{Title: "last", Width: 8},
-		{Title: "", Width: 2},
+	return []column{
+		{Width: glyph},
+		{Title: "job", Width: maxInt(1, name())},
+		{Title: "schedule", Width: sched},
+		{Title: "next run", Width: next},
+		{Title: "last", Width: last},
+		{Width: run},
 	}
-	if w < 60 {
-		cols[2].Width = 0
-		cols[4].Width = 0
+}
+
+// runColumns keeps the run columns at their natural widths and puts the slack in a
+// trailing filler column, so the timestamps stay next to their durations instead of a
+// 60-cell gap opening between them. Narrow panes shed the rightmost columns first.
+func runColumns(w int) []column {
+	cols := []column{
+		{Title: "started", Width: 20},
+		{Title: "dur", Width: 9},
+		{Title: "status", Width: 11},
+		{Title: "trigger", Width: 11},
+		{Title: "exit", Width: 6},
+	}
+	for _, optional := range []int{3, 4, 1} {
+		if columnsWidth(cols) <= w {
+			break
+		}
+		cols[optional].Width = 0
+	}
+	// Still over budget on a very narrow pane: the timestamp column gives way.
+	if over := columnsWidth(cols) - w; over > 0 {
+		cols[0].Width = maxInt(1, cols[0].Width-over)
+	}
+	// A filler column absorbs the slack, because a row must fill the pane or the cursor
+	// band stops short of its right edge.
+	if slack := w - columnsWidth(cols); slack > 0 {
+		cols = append(cols, column{Width: slack})
 	}
 	return cols
 }
 
-func runColumns(w int) []table.Column {
-	first := w - (7 + 9 + 9 + 4) - 5*2
-	if first < 16 {
-		first = 16
+func columnsWidth(cols []column) int {
+	total := 0
+	for _, c := range cols {
+		total += c.Width
 	}
-	return []table.Column{
-		{Title: "started", Width: first},
-		{Title: "dur", Width: 7},
-		{Title: "status", Width: 9},
-		{Title: "trigger", Width: 9},
-		{Title: "exit", Width: 4},
-	}
+	return total
 }
 
 func (m *Model) syncJobs() {
-	rows := make([]table.Row, 0, len(m.snap.Jobs))
+	rows := make([][]cellText, 0, len(m.snap.Jobs))
 	for _, v := range m.snap.Jobs {
-		name := v.Job.Name
-		if name == "" {
-			name = v.Job.ID
-		}
-		run := "▶"
+		run := cellText{"▶", styleDim}
 		if v.Running {
-			run = "…"
+			run = cellText{"…", styleInfo}
 		}
-		rows = append(rows, table.Row{
-			enabledGlyph(v), name, v.ScheduleText(),
-			countdown(v.NextRunAt), statusText(v.Last), run,
+		rows = append(rows, []cellText{
+			enabledCell(v),
+			text(orID(v.Job.Name, v.Job.ID)),
+			text(v.ScheduleText()),
+			countdownCell(v.NextRunAt),
+			statusCell(v.Last),
+			run,
 		})
 	}
 	m.jobs.SetRows(rows)
-	if m.jobs.Cursor() >= len(rows) {
-		m.jobs.SetCursor(maxInt(0, len(rows)-1))
-	}
 	m.syncDetail()
 }
 
@@ -137,7 +213,18 @@ func (m *Model) syncDetail() {
 		m.detail.SetContent(styleDim.Render("no job selected"))
 		return
 	}
-	m.detail.SetContent(detailText(v))
+	m.detail.SetContent(wrapText(detailText(v), m.detail.Width()))
+}
+
+// wrapText word-wraps prose to the pane width before it reaches the viewport. The
+// viewport's own soft wrap breaks at the cell — mid-word and, for a Korean prompt,
+// mid-sentence — and a job's prompt is prose. Wrapping here also makes the viewport's
+// line count the real line count, which is what its scroll arithmetic works from.
+func wrapText(s string, w int) string {
+	if w < 1 {
+		return s
+	}
+	return lipgloss.NewStyle().Width(w).Render(s)
 }
 
 func detailText(v JobView) string {
@@ -195,7 +282,7 @@ func limitText(n int) string {
 }
 
 func (m *Model) syncRuns() {
-	rows := make([]table.Row, 0, len(m.runList))
+	rows := make([][]cellText, 0, len(m.runList))
 	for i := len(m.runList) - 1; i >= 0; i-- {
 		r := m.runList[i]
 		started := "—"
@@ -206,18 +293,16 @@ func (m *Model) syncRuns() {
 		if r.ExitCode != nil {
 			exit = fmt.Sprint(*r.ExitCode)
 		}
-		rows = append(rows, table.Row{
-			started, durationText(r.DurationSec), statusText(r), string(r.Trigger), exit,
+		rows = append(rows, []cellText{
+			text(started), text(durationText(r.DurationSec)),
+			statusCell(r), text(string(r.Trigger)), text(exit),
 		})
 	}
 	m.runs.SetRows(rows)
-	if m.runs.Cursor() >= len(rows) {
-		m.runs.SetCursor(maxInt(0, len(rows)-1))
-	}
 	m.syncOutput()
 }
 
-// runAt maps a table row back to a run: the table shows newest first, the slice is
+// runAt maps a list row back to a run: the list shows newest first, the slice is
 // newest last.
 func (m *Model) runAt(row int) *model.Run {
 	i := len(m.runList) - 1 - row
@@ -234,7 +319,11 @@ func (m *Model) syncOutput() {
 		return
 	}
 	head := fmt.Sprintf("%s  %s  %s\n", r.RunID, statusText(r), reasonText(r))
-	m.output.SetContent(head + "\n" + LogText(m.roots, r))
+	m.output.SetContent(wrapText(head+"\n"+LogText(m.roots, r), m.output.Width()))
+	if m.follow {
+		// Following means the tail, and a live run's log grows under the reader.
+		m.output.GotoBottom()
+	}
 }
 
 func reasonText(r *model.Run) string {
@@ -276,22 +365,20 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// buildLayers composes one full-screen string and then overlays *transparent* hit
-// layers on top of it. Rendering and hit testing therefore share one geometry: the boxes
-// have fixed sizes, so every overlay offset is arithmetic on those sizes rather than a
-// guess (docs/spec/06-tui.md §2).
+// renderScreen composes the frame and the hit table from one set of rectangles, so the
+// two can never disagree (docs/spec/06-tui.md §2).
 func (m *Model) renderScreen() string {
-	bodyH := m.bodyHeight()
+	p := m.panes()
 	var content string
 	var hits []hitRect
 
 	switch m.screen {
 	case screenJobs:
-		content, hits = m.renderJobs(bodyH)
+		content, hits = m.renderJobs(p)
 	case screenDetail:
-		content, hits = m.renderDetail(bodyH)
+		content, hits = m.renderDetail(p)
 	default:
-		content, hits = m.renderRuns(bodyH)
+		content, hits = m.renderRuns(p)
 	}
 
 	screen := lipgloss.JoinVertical(lipgloss.Left,
@@ -302,7 +389,7 @@ func (m *Model) renderScreen() string {
 		// click on it wins over the header.
 		hit("pane.header", 0, 0, m.width, 1, 1),
 		hit("hdr.mouse", maxInt(0, m.width-14), 0, 14, 1, 3),
-		hit("pane.help", 0, headerRows+bodyH, m.width, footerHeight(m), 1),
+		hit("pane.help", 0, headerRows+m.bodyHeight(), m.width, footerHeight(m), 1),
 	}
 	// Body rectangles are positioned relative to the body, which starts under the header.
 	for _, r := range hits {
@@ -350,10 +437,15 @@ func hit(id string, x, y, w, h, z int) hitRect {
 	return hitRect{ID: id, Rect: image.Rect(x, y, x+w, y+h), Z: z}
 }
 
+// rectHit registers a pane's own rectangle, which the layout already computed.
+func rectHit(id string, r image.Rectangle, z int) hitRect {
+	return hitRect{ID: id, Rect: r, Z: z}
+}
+
 func (m *Model) bodyHeight() int {
 	h := m.height - headerRows - footerHeight(m)
-	if h < 4 {
-		h = 4
+	if h < 6 {
+		h = 6
 	}
 	return h
 }
@@ -365,34 +457,27 @@ func footerHeight(m *Model) int {
 	return 1
 }
 
-// renderJobs is screen 1: the job table beside the detail pane.
-func (m *Model) renderJobs(bodyH int) (string, []hitRect) {
-	listW := m.listWidth()
-	detailW := m.width - listW
-
-	left := box(m, "pane.jobs", listW, bodyH, m.jobs.View())
-	right := box(m, "pane.detail", detailW, bodyH, m.detail.View())
+// renderJobs is screen 1: the job list beside the detail pane.
+func (m *Model) renderJobs(p paneLayout) (string, []hitRect) {
+	left := m.box("pane.jobs", p.first, listPane(&m.jobs, p.first))
+	right := m.box("pane.detail", p.second, viewportPane(&m.detail, p.second))
 	content := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 
 	hits := []hitRect{
-		hit("pane.jobs", 0, 0, listW, bodyH, 1),
-		hit("pane.detail", listW, 0, detailW, bodyH, 1),
+		rectHit("pane.jobs", p.first, 1),
+		rectHit("pane.detail", p.second, 1),
 	}
 
-	// One row layer per visible row. The box border is one line and the table renders a
-	// header line above the rows, so the first row sits at +2.
-	const rowOrigin = 2
-	visible := bodyH - 3
-	for i, v := range m.snap.Jobs {
-		if i >= visible {
-			break
-		}
-		id := v.Job.ID
-		y := rowOrigin + i
+	w, _ := innerSize(p.first)
+	first, last := visibleRange(&m.jobs, len(m.snap.Jobs))
+	for i := first; i < last; i++ {
+		id := m.snap.Jobs[i].Job.ID
+		y := rowY(p.first, i-first)
+		runW := m.jobs.ColumnWidth(-1)
 		hits = append(hits,
-			hit("row."+id, 1, y, listW-2, 1, 2),
-			hit("row."+id+".toggle", 1, y, 3, 1, 4),
-			hit("row."+id+".run", maxInt(2, listW-3), y, 2, 1, 4),
+			hit("row."+id, p.first.Min.X+1, y, w, 1, 2),
+			hit("row."+id+".toggle", p.first.Min.X+1, y, m.jobs.ColumnWidth(0), 1, 4),
+			hit("row."+id+".run", p.first.Max.X-1-runW, y, runW, 1, 4),
 		)
 	}
 	return content, hits
@@ -406,12 +491,10 @@ func (m *Model) listWidth() int {
 	return w
 }
 
-// renderDetail is screen 2: the definition above the recent-runs table, with the action
+// renderDetail is screen 2: the definition above the recent-runs list, with the action
 // buttons on the first line.
-func (m *Model) renderDetail(bodyH int) (string, []hitRect) {
+func (m *Model) renderDetail(p paneLayout) (string, []hitRect) {
 	v, _ := m.snap.Job(m.selected)
-	defH := bodyH * 55 / 100
-	runsH := bodyH - defH
 
 	runBtn := styleButton.Render("run ▶")
 	pauseBtn := styleButton.Render(pauseLabel(v))
@@ -419,80 +502,135 @@ func (m *Model) renderDetail(bodyH int) (string, []hitRect) {
 	buttons := lipgloss.JoinHorizontal(lipgloss.Top, runBtn, " ", pauseBtn, " ", delBtn)
 
 	crumb := styleDim.Render(" ‹ jobs / ") + styleHeader.Render(m.selected)
-	bar := lipgloss.NewStyle().Width(m.width).Render(
-		crumb + strings.Repeat(" ", maxInt(1, m.width-lipgloss.Width(crumb)-lipgloss.Width(buttons)-1)) + buttons)
+	bar := lipgloss.NewStyle().MaxWidth(m.width).Render(
+		crumb + strings.Repeat(" ",
+			maxInt(1, m.width-lipgloss.Width(crumb)-lipgloss.Width(buttons)-1)) + buttons)
 
-	defPane := box(m, "pane.definition", m.width, defH-1, m.detail.View())
-	runsPane := box(m, "pane.runs", m.width, runsH, m.runs.View())
+	defPane := m.box("pane.definition", p.first, viewportPane(&m.detail, p.first))
+	runsPane := m.box("pane.runs", p.second, listPane(&m.runs, p.second))
 	content := lipgloss.JoinVertical(lipgloss.Left, bar, defPane, runsPane)
 
 	bx := maxInt(0, m.width-lipgloss.Width(buttons)-1)
 	hits := []hitRect{
-		hit("pane.definition", 0, 1, m.width, defH, 1),
-		hit("pane.runs", 0, defH, m.width, runsH, 1),
+		rectHit("pane.definition", p.first, 1),
+		rectHit("pane.runs", p.second, 1),
 		hit("nav.back", 0, 0, 10, 1, 3),
 		hit("btn.job.run", bx, 0, lipgloss.Width(runBtn), 1, 4),
 		hit("btn.job.pause", bx+lipgloss.Width(runBtn)+1, 0, lipgloss.Width(pauseBtn), 1, 4),
 		hit("btn.job.delete", bx+lipgloss.Width(runBtn)+lipgloss.Width(pauseBtn)+2, 0,
 			lipgloss.Width(delBtn), 1, 4),
 	}
-	// Rows of the recent-runs table, for click-to-open.
-	const rowOrigin = 2
-	for row := range m.runList {
-		r := m.runAt(row)
-		if r == nil || row >= runsH-3 {
-			break
-		}
-		hits = append(hits, hit("row.run."+r.RunID, 1, defH+rowOrigin+row, m.width-2, 1, 2))
-	}
-	return content, hits
+	return content, append(hits, m.runRowHits(p.second)...)
 }
 
 // renderRuns is screen 3: history beside the selected run's output.
-func (m *Model) renderRuns(bodyH int) (string, []hitRect) {
-	half := m.width / 2
-	crumb := styleDim.Render(" ‹ jobs / ") + styleHeader.Render(m.selected) + styleDim.Render(" / runs")
+func (m *Model) renderRuns(p paneLayout) (string, []hitRect) {
+	crumb := styleDim.Render(" ‹ jobs / ") + styleHeader.Render(m.selected) +
+		styleDim.Render(" / runs")
 	copyBtn := styleButton.Render("copy")
-	bar := crumb + strings.Repeat(" ", maxInt(1, m.width-lipgloss.Width(crumb)-lipgloss.Width(copyBtn)-1)) + copyBtn
+	bar := lipgloss.NewStyle().MaxWidth(m.width).Render(
+		crumb + strings.Repeat(" ",
+			maxInt(1, m.width-lipgloss.Width(crumb)-lipgloss.Width(copyBtn)-1)) + copyBtn)
 
-	left := box(m, "pane.runs", half, bodyH-1, m.runs.View())
-	right := box(m, "pane.output", m.width-half, bodyH-1, m.output.View())
+	left := m.box("pane.runs", p.first, listPane(&m.runs, p.first))
+	right := m.box("pane.output", p.second, viewportPane(&m.output, p.second))
 	content := lipgloss.JoinVertical(lipgloss.Left, bar,
 		lipgloss.JoinHorizontal(lipgloss.Top, left, right))
 
 	hits := []hitRect{
-		hit("pane.runs", 0, 1, half, bodyH-1, 1),
-		hit("pane.output", half, 1, m.width-half, bodyH-1, 1),
+		rectHit("pane.runs", p.first, 1),
+		rectHit("pane.output", p.second, 1),
 		hit("nav.back", 0, 0, 10, 1, 3),
 		hit("btn.copy", maxInt(0, m.width-lipgloss.Width(copyBtn)-1), 0,
 			lipgloss.Width(copyBtn), 1, 4),
 	}
-	const rowOrigin = 3
-	for row := range m.runList {
-		r := m.runAt(row)
-		if r == nil || row >= bodyH-4 {
-			break
-		}
-		hits = append(hits, hit("row.run."+r.RunID, 1, rowOrigin+row, half-2, 1, 2))
-	}
-	return content, hits
+	return content, append(hits, m.runRowHits(p.first)...)
 }
 
-// box frames a widget at an exact size, so the overlay arithmetic above is exact too.
-func box(m *Model, id string, w, h int, content string) string {
+// runRowHits is one rectangle per visible run row, shared by both screens that list runs.
+func (m *Model) runRowHits(r image.Rectangle) []hitRect {
+	w, _ := innerSize(r)
+	first, last := visibleRange(&m.runs, m.runs.Len())
+	hits := make([]hitRect, 0, last-first)
+	for row := first; row < last; row++ {
+		run := m.runAt(row)
+		if run == nil {
+			continue
+		}
+		hits = append(hits, hit("row.run."+run.RunID, r.Min.X+1, rowY(r, row-first), w, 1, 2))
+	}
+	return hits
+}
+
+// rowY is the screen row of the nth visible row of a pane: past the top border and past
+// the list's header line.
+func rowY(r image.Rectangle, n int) int { return r.Min.Y + 2 + n }
+
+// visibleRange is the half-open range of row indices a list currently shows. It comes
+// from the list's own window, which is why herdr-cron owns that window (see rowList).
+func visibleRange(l *rowList, n int) (int, int) {
+	first := minInt(l.Top(), n)
+	return first, minInt(first+l.Visible(), n)
+}
+
+// box frames a widget at an exact size. Width and Height are the whole block in lipgloss
+// v2, border included, and the widget inside was sized to match, so nothing is clipped.
+func (m *Model) box(id string, r image.Rectangle, content string) string {
 	style := styleBorder
 	if m.focus == id {
 		style = styleFocused
 	}
-	inner := w - 2
-	if inner < 1 {
-		inner = 1
+	return style.
+		Width(r.Dx()).Height(r.Dy()).
+		MaxWidth(r.Dx()).MaxHeight(r.Dy()).
+		Render(content)
+}
+
+// listPane is a list plus the scroll hint that occupies the pane's last row.
+func listPane(l *rowList, r image.Rectangle) string {
+	w, _ := innerSize(r)
+	return l.View() + "\n" + listHint(l, w)
+}
+
+// viewportPane is a viewport plus the scroll hint that occupies the pane's last row.
+func viewportPane(v *viewport.Model, r image.Rectangle) string {
+	w, _ := innerSize(r)
+	return v.View() + "\n" + viewportHint(v, w)
+}
+
+// viewportHint is the last row of a scrollable pane.
+//
+// A pane holding more text than it shows looks exactly like a pane with nothing more to
+// show. That is what makes a reader conclude the scroll keys are dead, so the hint states
+// which of the two it is, and in which direction there is more.
+func viewportHint(v *viewport.Model, w int) string {
+	if v.AtTop() && v.AtBottom() {
+		return ""
 	}
-	innerH := h - 2
-	if innerH < 1 {
-		innerH = 1
+	return styleDim.Render(rightAlign(
+		fmt.Sprintf("%s %d%% %s", arrow("▲", !v.AtTop()),
+			int(v.ScrollPercent()*100), arrow("▼", !v.AtBottom())), w))
+}
+
+func listHint(l *rowList, w int) string {
+	if l.AtTop() && l.AtBottom() {
+		return ""
 	}
-	return style.Width(inner).Height(innerH).MaxWidth(w).MaxHeight(h).Render(content)
+	first, last := visibleRange(l, l.Len())
+	return styleDim.Render(rightAlign(
+		fmt.Sprintf("%s %d-%d/%d %s", arrow("▲", !l.AtTop()),
+			first+1, last, l.Len(), arrow("▼", !l.AtBottom())), w))
+}
+
+func arrow(glyph string, on bool) string {
+	if on {
+		return glyph
+	}
+	return " "
+}
+
+func rightAlign(s string, w int) string {
+	return strings.Repeat(" ", maxInt(0, w-lipgloss.Width(s))) + s
 }
 
 func (m *Model) renderModal(screen string, rects []hitRect) (string, []hitRect) {
@@ -606,9 +744,9 @@ func (m *Model) handleHit(msg LayerHitMsg) tea.Cmd {
 		return nil
 	case msg.ID == "nav.back":
 		if m.screen == screenRuns {
-			m.screen = screenDetail
+			m.gotoScreen(screenDetail, "pane.definition")
 		} else {
-			m.screen = screenJobs
+			m.gotoScreen(screenJobs, "pane.jobs")
 		}
 		return nil
 	case msg.ID == "btn.copy":
@@ -628,13 +766,11 @@ func (m *Model) handleHit(msg LayerHitMsg) tea.Cmd {
 		return m.runNow(strings.TrimSuffix(strings.TrimPrefix(msg.ID, "row."), ".run"))
 	case strings.HasPrefix(msg.ID, "row."):
 		return m.selectRow(strings.TrimPrefix(msg.ID, "row."))
-	case msg.ID == "pane.detail", msg.ID == "pane.definition", msg.ID == "pane.output":
-		m.jobs.Blur()
-		m.focus = msg.ID
-		return nil
-	case msg.ID == "pane.jobs", msg.ID == "pane.runs":
-		m.focus = msg.ID
-		m.jobs.Focus()
+	case msg.ID == "pane.detail", msg.ID == "pane.definition", msg.ID == "pane.output",
+		msg.ID == "pane.jobs", msg.ID == "pane.runs":
+		// Clicking a pane moves keyboard focus to it, so the keys and the highlighted
+		// border never disagree (docs/spec/06-tui.md §1.3).
+		m.setFocus(msg.ID)
 		return nil
 	}
 	return nil
@@ -648,9 +784,8 @@ func (m *Model) selectRow(jobID string) tea.Cmd {
 			continue
 		}
 		m.jobs.SetCursor(i)
-		m.jobs.Focus()
-		m.focus = "pane.jobs"
-		m.syncDetail()
+		m.setFocus("pane.jobs")
+		m.syncJobs()
 		break
 	}
 	double := m.lastClickID == jobID && time.Since(m.lastClickAt) < doubleClickWindow
@@ -662,61 +797,61 @@ func (m *Model) selectRow(jobID string) tea.Cmd {
 }
 
 func (m *Model) selectRun(runID string) tea.Cmd {
-	for row := range m.runList {
+	for row := range m.runs.Len() {
 		if r := m.runAt(row); r != nil && r.RunID == runID {
 			m.runs.SetCursor(row)
 			m.runIndex = row
-			m.focus = "pane.runs"
-			m.syncOutput()
 			break
 		}
 	}
 	if m.screen == screenDetail {
-		m.screen = screenRuns
+		m.gotoScreen(screenRuns, "pane.runs")
+		return nil
 	}
+	m.setFocus("pane.runs")
+	m.syncRuns()
 	return nil
 }
 
-// handleWheel forwards a wheel event to whichever pane it landed on. bubbles/table has no
-// wheel handling at all, so the list scroll is implemented here; viewport handles its own
+// handleWheel forwards a wheel event to whichever pane it landed on. The lists scroll
+// here because their window is herdr-cron's; the viewports scroll natively
 // (docs/spec/06-tui.md §1.5).
 func (m *Model) handleWheel(msg LayerHitMsg) tea.Cmd {
 	wheel, _ := msg.Mouse.(tea.MouseWheelMsg)
-	up := wheel.Button == tea.MouseWheelUp
+	step := wheelStep
+	if wheel.Button == tea.MouseWheelUp {
+		step = -wheelStep
+	}
+
 	target := msg.ID
-	if i := strings.Index(target, "row."); i == 0 {
-		if strings.HasPrefix(target, "row.run.") {
-			target = "pane.runs"
-		} else {
-			target = "pane.jobs"
-		}
+	if strings.HasPrefix(target, "row.run.") {
+		target = "pane.runs"
+	} else if strings.HasPrefix(target, "row.") {
+		target = "pane.jobs"
 	}
 
 	switch target {
 	case "pane.jobs":
-		if up {
-			m.jobs.MoveUp(3)
-		} else {
-			m.jobs.MoveDown(3)
-		}
-		m.syncDetail()
+		m.jobs.Move(step)
+		m.syncJobs()
 	case "pane.runs":
-		if up {
-			m.runs.MoveUp(3)
-		} else {
-			m.runs.MoveDown(3)
-		}
-		m.syncOutput()
+		m.runs.Move(step)
+		m.runIndex = m.runs.Cursor()
+		m.syncRuns()
 	case "pane.detail", "pane.definition":
-		var cmd tea.Cmd
-		m.detail, cmd = m.detail.Update(msg.Mouse)
-		return cmd
+		scrollViewport(&m.detail, step)
 	case "pane.output":
-		var cmd tea.Cmd
-		m.output, cmd = m.output.Update(msg.Mouse)
-		return cmd
+		scrollViewport(&m.output, step)
 	}
 	return nil
+}
+
+func scrollViewport(v *viewport.Model, step int) {
+	if step < 0 {
+		v.ScrollUp(-step)
+		return
+	}
+	v.ScrollDown(step)
 }
 
 // ---------------------------------------------------------------- deletion
@@ -780,4 +915,11 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func clampInt(v, low, high int) int {
+	if high < low {
+		low, high = high, low
+	}
+	return minInt(high, maxInt(low, v))
 }
