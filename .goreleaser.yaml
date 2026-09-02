@@ -1,0 +1,106 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: herdr-cron
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod download
+
+builds:
+  - id: herdr-cron
+    main: ./cmd/herdr-cron
+    binary: herdr-cron
+    # Pure Go, no cgo: one Linux machine cross-compiles every target. modernc-style
+    # cgo dependencies were deliberately avoided for exactly this reason
+    # (docs/research/2026-09-02-agent-skill-and-cli-ux.md B6).
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    # These three names must stay in sync with the package-level vars in
+    # cmd/herdr-cron/main.go and with the Makefile's LDFLAGS. Rename one, rename
+    # all three. When none of them is stamped — which is every Herdr `[[build]]`,
+    # because Herdr clones without tags — internal/cli/buildinfo.go fills the gap.
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+    # Reproducible archives: stamp binaries with the commit time, not build time.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: herdr-cron
+    ids:
+      - herdr-cron
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+      # The plugin manifest ships so an archive can be pointed at by
+      # `herdr plugin link`, and the skill ships so it can be installed from a
+      # release without running the binary first.
+      - herdr-plugin.toml
+      - skills/**/*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Performance
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Refactors
+      regexp: '^.*?refactor(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: Others
+      order: 999
+  filters:
+    exclude:
+      - '^docs(\([[:word:]]+\))??!?:'
+      - '^test(\([[:word:]]+\))??!?:'
+      - '^chore(\([[:word:]]+\))??!?:'
+      - '^ci(\([[:word:]]+\))??!?:'
+      - '^style(\([[:word:]]+\))??!?:'
+      - "^Merge branch"
+      - "^Merge pull request"
+      - "^Merge remote-tracking branch"
+
+release:
+  # release-please already created the release and wrote its notes from the
+  # conventional commits; goreleaser only attaches the built artifacts.
+  mode: append
+  draft: false
+  prerelease: auto
+
+# No `brews:` or `scoops:`. Publishing a formula or a manifest means pushing to a
+# second repository, which needs a PAT the built-in GITHUB_TOKEN cannot replace,
+# and neither huketo/homebrew-tap nor huketo/scoop-bucket exists. The supported
+# channels are the Herdr plugin, `go install`, and these archives.
+
+report_sizes: true

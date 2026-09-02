@@ -1,0 +1,141 @@
+name: Bug report
+description: Something in herdr-cron behaves incorrectly.
+title: "fix: "
+labels:
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Redact secrets before pasting: a job's `env`
+        block and an agent `prompt` can both carry tokens, and captured run
+        output under the state directory is not redacted for you.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The behaviour you observed.
+      placeholder: |
+        A job with `schedule.cron: "17 3 * * 1-5"` and `timezone: Asia/Seoul`
+        fired at 03:17 UTC instead of 03:17 local.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands, in order.
+      render: shell
+      placeholder: |
+        herdr-cron job add --id demo --schedule "17 3 * * 1-5" --timezone Asia/Seoul --command "date -u"
+        herdr-cron validate --schedule "17 3 * * 1-5" --timezone Asia/Seoul --next 5
+        herdr-cron run-once demo
+        herdr-cron run logs --tail 50 <run-id>
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of herdr-cron is involved?
+      options:
+        - cli (flags, envelopes, exit codes)
+        - schedule (cron/every/at parsing, timezones, jitter, catchup)
+        - daemon (liveness, reload, watcher, run-now)
+        - runner (execution, timeout, concurrency, captured output)
+        - store (run history, log files, overrides)
+        - config (jobs.yaml parsing and validation)
+        - service (launchd / systemd / schtasks registration)
+        - herdr plugin integration (panes, agent jobs)
+        - tui
+        - skill / docs
+        - not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: herdr-cron version
+      description: Output of `herdr-cron --version`.
+      placeholder: herdr-cron 0.1.0 (abc1234, 2026-01-01T00:00:00Z) go1.26.2 linux/amd64
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and architecture
+      placeholder: macOS 15.3 arm64 / Ubuntu 24.04 amd64 / Windows 11 amd64
+    validations:
+      required: true
+
+  - type: input
+    id: herdr-version
+    attributes:
+      label: Herdr version
+      description: >
+        Output of `herdr --version`. Required if the report involves the plugin,
+        a pane, or a `kind: agent` job; leave blank otherwise.
+      placeholder: 0.8.2
+
+  - type: textarea
+    id: status
+    attributes:
+      label: "`herdr-cron status -o text` output"
+      description: >
+        Shows daemon liveness, the config and state roots, and the next
+        occurrences — that is usually enough to place the bug.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: job
+    attributes:
+      label: The job stanza
+      description: >
+        The single `jobs.yaml` entry involved, not the whole file. Remove tokens
+        from `env` and from any `prompt`.
+      render: yaml
+      placeholder: |
+        - id: nightly-deps
+          name: Nightly dependency audit
+          enabled: true
+          schedule:
+            cron: "17 3 * * 1-5"
+            timezone: Asia/Seoul
+          kind: shell
+          shell:
+            command: go list -m -u all
+          cwd: ~/src/herdr
+          timeout: 10m
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Daemon or run output
+      description: >
+        Relevant lines from the daemon log or from `herdr-cron run logs`.
+        Redact anything secret.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I removed tokens and other secrets from everything I pasted.
+          required: true

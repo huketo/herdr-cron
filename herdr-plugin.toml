@@ -1,0 +1,83 @@
+# Herdr plugin manifest for herdr-cron.
+#
+# Job definitions and state do NOT live here. `jobs.yaml` lives under the
+# herdr-cron config root and the state root, both printed by:
+#
+#   herdr-cron status
+#
+# See README.md and docs/spec/04-storage.md §1.
+#
+# Every key below is one Herdr 0.8.2 accepts; the shapes are quoted from two
+# installed plugins in docs/research/2026-09-02-herdr-plugin-integration.md
+# ("herdr-reviewr's manifest, verbatim" and §8). In particular `command` is an
+# argv **array** — there is no separate `args` key — and Herdr runs it directly
+# with no shell.
+
+id = "huketo.herdr-cron"
+name = "herdr-cron"
+# release-please owns this line via the `$.version` extra-files jsonpath, which
+# is why it must stay a top-level key. 0.0.0 = not released yet.
+version = "0.0.0"
+# The floor is the version the headless orchestration path was probed against;
+# every claim in docs/spec/07-herdr-integration.md rests on it.
+min_herdr_version = "0.8.2"
+description = "Schedule automated work: shell commands and prompts to coding agents in Herdr panes."
+platforms = ["linux", "macos", "windows"]
+
+# Built from source on `herdr plugin install`, so the marketplace ships no
+# binaries. It does NOT run on `herdr plugin link` — a local author builds their
+# own working tree with `make build`. Requires the Go toolchain on PATH.
+# The output path is relative to the plugin root.
+[[build]]
+command = ["go", "build", "-trimpath", "-ldflags", "-s -w", "-o", "bin/herdr-cron", "./cmd/herdr-cron"]
+
+# A startup hook MUST exit; it is not a supervised daemon slot. `daemon --detach`
+# returns as soon as the lock is held and the first heartbeat is written, and it
+# is idempotent — which matters because this hook re-runs on every server start
+# and every live handoff.
+[[startup]]
+command = ["bin/herdr-cron", "daemon", "--detach"]
+
+# Actions are global: they act on the schedule, not on whatever pane happens to
+# be focused. `global` is absent from the docs page but present in the binary's
+# own schema and used by two installed plugins.
+[[actions]]
+id = "install-cli"
+title = "Install the herdr-cron CLI on PATH"
+description = "Link the binary into a PATH directory and install the bundled Agent Skill, so agents can call herdr-cron directly."
+contexts = ["global"]
+command = ["bin/herdr-cron", "install-cli", "--with-skill", "--force"]
+
+[[actions]]
+id = "status"
+title = "herdr-cron: scheduler status"
+description = "Report daemon liveness, the config and state roots, and the next occurrences."
+contexts = ["global"]
+command = ["bin/herdr-cron", "status", "-o", "text"]
+
+[[actions]]
+id = "list-jobs"
+title = "herdr-cron: list jobs"
+description = "List every job with its schedule, next run, and last outcome."
+contexts = ["global"]
+command = ["bin/herdr-cron", "job", "list", "-o", "text"]
+
+[[actions]]
+id = "reload"
+title = "herdr-cron: reload jobs.yaml"
+description = "Ask the running daemon to re-read the job definitions."
+contexts = ["global"]
+command = ["bin/herdr-cron", "reload"]
+
+# The TUI as a Herdr pane surface. The command goes through `sh -c` with an
+# absolute path because a pane's cwd is the workspace under work, not the plugin
+# root, and the binary is not assumed to be on PATH — the shape herdr-reviewr
+# uses for the same reason.
+#
+# Mouse forwarding through a plugin pane is UNVERIFIED (docs/spec/06-tui.md §9);
+# the `m` key toggle is the fallback when it does not work.
+[[panes]]
+id = "tui"
+title = "herdr-cron"
+placement = "split"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-cron\""]

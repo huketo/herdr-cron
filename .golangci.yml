@@ -1,0 +1,66 @@
+version: "2"
+
+run:
+  timeout: 5m
+  # Only the files matching the current GOOS are analyzed, so detach_windows.go,
+  # procgroup_windows.go and friends are invisible here. Run the linter again
+  # with GOOS=windows (or GOOS=darwin) to cover the other build tags.
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errcheck
+    - errorlint
+    - gocritic
+    - govet
+    - ineffassign
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - staticcheck
+    - unconvert
+    - unused
+    - usetesting
+  settings:
+    errcheck:
+      check-type-assertions: true
+      # Writes to an already-broken stdout/stderr cannot be handled: the only
+      # channel for reporting the failure is the stream that just failed. This
+      # is the normal output path for the whole cobra tree, which renders its
+      # JSON envelopes with fmt.Fprintf(os.Stdout, ...).
+      # Every other unchecked error stays an error.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    revive:
+      rules:
+        - name: exported
+          disabled: false
+        - name: package-comments
+          disabled: true
+  exclusions:
+    rules:
+      - path: _test\.go$
+        linters:
+          - bodyclose
+          - noctx
+
+issues:
+  # The defaults cap a linter at 50 findings and the same finding at 3, which
+  # silently hides the tail: a first run reported 50 revive issues and omitted
+  # a whole package's worth. CI must show every finding it is going to fail on.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/huketo/herdr-cron

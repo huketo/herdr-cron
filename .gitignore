@@ -1,0 +1,24 @@
+# build output
+/bin/
+/dist/
+*.test
+coverage.out
+coverage.txt
+
+# `go build ./cmd/herdr-cron` with no -o drops the binary here
+/herdr-cron
+/herdr-cron.exe
+
+# local scratch state: the dirs a dev trial run creates in the worktree via
+# HERDR_CRON_HOME=./.herdr-cron or --state-dir ./.state, plus the throwaway
+# jobs.yaml that `--config ./jobs.yaml` points at. None of these are checked in.
+/.herdr-cron/
+/.state/
+/jobs.yaml
+
+# CONTRIBUTING.md and .github/workflows/commitlint.yml both install commitlint
+# with `npm install --no-save` in this directory, because commitlint resolves
+# the `extends` in commitlint.config.mjs relative to the config file. There is
+# no package.json here and there must not be one.
+/node_modules/
+/package-lock.json

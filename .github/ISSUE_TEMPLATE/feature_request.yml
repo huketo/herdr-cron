@@ -1,0 +1,84 @@
+name: Feature request
+description: Propose a change to herdr-cron.
+title: "feat: "
+labels:
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        herdr-cron has a deliberately narrow shape: jobs declared in one
+        `jobs.yaml`, three schedule forms (`cron`, `every`, `at`), two job kinds
+        (`shell`, `agent`), and one JSON envelope per CLI call. Proposals that
+        keep that shape land much faster than ones that add a new execution
+        model. `docs/spec/README.md` records the decisions already made (D1-D8)
+        — a proposal that reverses one of them should say which.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you unable to do today? Describe the situation, not the solution.
+      placeholder: |
+        I want a job to run only when the previous run succeeded, and today I
+        have to encode that in the command itself.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: >
+        What should herdr-cron do? Include the concrete `jobs.yaml` field, CLI
+        flag, or JSON payload if there is one.
+      placeholder: |
+        A `depends_on: <job-id>` field, surfaced in `herdr-cron job get` and
+        reported as a skip reason in the run record.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - cli (flags, envelopes, exit codes)
+        - schedule semantics (cron/every/at, timezones, jitter, catchup)
+        - daemon / run-now / reload
+        - runner (execution, timeout, concurrency, output capture)
+        - store (run history, retention, logs)
+        - config (jobs.yaml schema)
+        - service (OS scheduler drivers)
+        - herdr plugin integration
+        - tui
+        - skill / docs
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including "do nothing" and any workaround you use today.
+
+  - type: dropdown
+    id: breaking
+    attributes:
+      label: Is this a breaking change?
+      options:
+        - "No"
+        - "Yes — it changes existing flags, JSON payloads, exit codes, or the jobs.yaml schema"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and discussions for this idea.
+          required: true
+        - label: I checked docs/spec/README.md for a decision that already covers this.
+          required: true
