@@ -76,7 +76,7 @@ lock files ([`04-storage.md`](04-storage.md) §9), `validate --timezone`, the `v
 payload's `scheduleType` / `jobs[]` split ([`05-cli.md`](05-cli.md) §2, §3.5), the `daemon
 --detach` flag, `install-cli`, and the four contract errors below.
 
-Six things the spec got wrong or did not say, learned by running:
+Eight things the spec got wrong or did not say, learned by running:
 
 1. **Daemon liveness cannot rest on the heartbeat alone.** A `kill -9` leaves a heartbeat that
    stays "fresh" for a minute, during which `status` lied and `daemon --detach` was a silent
@@ -104,6 +104,22 @@ Six things the spec got wrong or did not say, learned by running:
    `View()` returns the header line and nothing else — rows present, none visible — and columns
    must be budgeted at `Width + 2` each for the default cell padding. Corrected in
    [`06-tui.md`](06-tui.md) §2.
+7. **`HERDR_PLUGIN_STATE_DIR` must not be the state root**, even though `04-storage.md` §1
+   originally required it. Herdr sets it for every `[[startup]]` hook, so the daemon Herdr
+   started resolved `~/.local/state/herdr/plugins/huketo.herdr-cron` while a daemon started from
+   a terminal resolved `~/.local/state/herdr-cron` — same `jobs.yaml`, two `daemon.lock` files,
+   two live daemons, and **every occurrence executed twice**. Found by installing the released
+   plugin beside the standalone CLI, which is the only configuration that exhibits it. The rule
+   the fix establishes: the state root is a function of the machine, never of which front door
+   started the process. Corrected in [`04-storage.md`](04-storage.md) §1,
+   [`05-cli.md`](05-cli.md) §1.2 and [`07-herdr-integration.md`](07-herdr-integration.md), with
+   a regression test in `internal/paths`.
+8. **The plugin manifest's `command` is an argv array and there is no `args` key.** The first
+   manifest was written as `command = "go"` plus `args = [...]`, which is valid TOML and passed a
+   TOML-syntax check — and `herdr plugin link` rejected the whole file with
+   `plugin_manifest_parse_failed`, so the plugin could not be installed at all. The real schema
+   is quoted in `docs/research/2026-09-02-herdr-plugin-integration.md`; it was simply not
+   followed. A test now asserts the shape rather than the syntax.
 
 ## Documents
 

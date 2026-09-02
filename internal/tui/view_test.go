@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,15 @@ import (
 	"github.com/huketo/herdr-cron/internal/store"
 )
 
-const fixture = `version: 1
+// fixtureTemplate is the jobs.yaml every test in this file renders from.
+//
+// %[1]s is an absolute directory. It is a placeholder rather than a literal
+// because a job's `cwd` MUST be absolute after expansion, and "/tmp" is not
+// absolute on Windows — filepath.IsAbs rejects a path with no volume name. A
+// hardcoded POSIX path made the whole file fail validation there, so every
+// assertion below saw an empty job table and an error banner instead of the
+// three jobs it was written for.
+const fixtureTemplate = `version: 1
 defaults:
   timezone: Asia/Seoul
 jobs:
@@ -22,18 +31,18 @@ jobs:
     schedule: { cron: "17 3 * * 1-5" }
     kind: shell
     shell: { command: "echo audited" }
-    cwd: /tmp
+    cwd: %[1]s
   - id: build-smoke
     schedule: { every: 30m }
     kind: shell
     shell: { command: "echo smoke" }
-    cwd: /tmp
+    cwd: %[1]s
   - id: daily-report
     name: 일일보고 스케줄
     schedule: { cron: "0 18 * * 1-5" }
     kind: shell
     shell: { command: "echo 보고" }
-    cwd: /tmp
+    cwd: %[1]s
 `
 
 func testRoots(t *testing.T) paths.Roots {
@@ -43,6 +52,10 @@ func testRoots(t *testing.T) paths.Roots {
 	if err := os.MkdirAll(filepath.Join(home, "config"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The job cwd is a real directory on this platform, so validation sees an
+	// absolute path that exists and emits no cwd_missing warning either.
+	cwd := t.TempDir()
+	fixture := fmt.Sprintf(fixtureTemplate, filepath.ToSlash(cwd))
 	if err := os.WriteFile(filepath.Join(home, "config", "jobs.yaml"), []byte(fixture), 0o644); err != nil {
 		t.Fatal(err)
 	}

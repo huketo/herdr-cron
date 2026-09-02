@@ -623,8 +623,10 @@ hook (HPI §8): structurally herdr-cron's problem exactly.
 
 ```toml
 # Herdr plugin manifest for herdr-cron. User-editable config does NOT live here: HERDR_PLUGIN_ROOT is a
-# managed checkout that `herdr plugin install` replaces wholesale. jobs.yaml lives in
-# HERDR_PLUGIN_CONFIG_DIR, all state in HERDR_PLUGIN_STATE_DIR; see docs/spec/04-storage.md §1.
+# managed checkout that `herdr plugin install` replaces wholesale. jobs.yaml and all state live at the
+# machine-wide roots of docs/spec/04-storage.md §1, which are already outside HERDR_PLUGIN_ROOT.
+# HERDR_PLUGIN_CONFIG_DIR and HERDR_PLUGIN_STATE_DIR are deliberately NOT used as roots: a state root
+# that varies by launcher gave the [[startup]] daemon its own daemon.lock and ran every job twice.
 id = "huketo.cron"
 name = "herdr-cron"
 version = "0.1.0"
@@ -710,8 +712,8 @@ Documented versus merely observed, because the difference decides what may be re
   after install and print any `warnings`: Herdr validates `[[events]] on =` values softly, so a typo'd hook silently
   never fires and only adds a warning (HPI §4).
 - **Lifecycle**: update is uninstall + install (there is no `plugin update`) and the root is replaced wholesale, but
-  everything durable is keyed by plugin id under `HERDR_PLUGIN_CONFIG_DIR` / `HERDR_PLUGIN_STATE_DIR`
-  ([`04-storage.md`](04-storage.md) §1), so reinstalling preserves every job and run. Plugin scope is per-user and
+  nothing durable lives under the root — the config and state roots of [`04-storage.md`](04-storage.md) §1 are
+  machine-wide and launcher-independent, so reinstalling preserves every job and run. Plugin scope is per-user and
   global, not per-session (HPI §1), and there is exactly one daemon per user
   ([`04-storage.md`](04-storage.md) §7) — so the hook firing once per session is harmless: every invocation after the
   first takes the no-op branch of `daemon --detach`. Marketplace listing is automatic for a public repo tagged

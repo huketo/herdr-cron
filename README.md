@@ -138,7 +138,7 @@ Definitions live in an authored, comment-preserving, git-committable `jobs.yaml`
 | macOS | `~/Library/Application Support/herdr-cron/config/jobs.yaml` | `~/Library/Application Support/herdr-cron/state` |
 | Windows | `%LocalAppData%\herdr-cron\config\jobs.yaml` | `%LocalAppData%\herdr-cron\state` |
 
-Windows uses `LocalAppData`, not roaming `AppData`, on purpose: a roaming job database replicated onto a second machine fires jobs against absolute paths that do not exist there. `XDG_CONFIG_HOME` and `XDG_STATE_HOME` are honoured on all three platforms; `HERDR_CRON_CONFIG`, `HERDR_CRON_STATE_DIR` and `HERDR_CRON_HOME` override them; the flags override everything. Under Herdr, `HERDR_PLUGIN_STATE_DIR` is the state root, because `HERDR_PLUGIN_ROOT` is replaced wholesale on every plugin update and nothing durable may live there.
+Windows uses `LocalAppData`, not roaming `AppData`, on purpose: a roaming job database replicated onto a second machine fires jobs against absolute paths that do not exist there. `XDG_CONFIG_HOME` and `XDG_STATE_HOME` are honoured on all three platforms; `HERDR_CRON_CONFIG`, `HERDR_CRON_STATE_DIR` and `HERDR_CRON_HOME` override them; the flags override everything. `HERDR_PLUGIN_STATE_DIR` is deliberately ignored: the state root depends only on the machine, never on which front door started the process, so the plugin and the standalone CLI always share one schedule, one history, and one daemon lock.
 
 A complete file, one job of each kind:
 

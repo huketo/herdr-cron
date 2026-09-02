@@ -38,7 +38,7 @@ vet: ## Run go vet
 
 .PHONY: lint
 lint: ## Run golangci-lint
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2 run
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run
 
 .PHONY: tidy
 tidy: ## Tidy go.mod/go.sum

@@ -38,14 +38,30 @@ Overrides, highest precedence first:
 1. `--config PATH` (file) and `--state-dir PATH` (directory) flags.
 2. `HERDR_CRON_CONFIG` and `HERDR_CRON_STATE_DIR`.
 3. `HERDR_CRON_HOME` — sets both, as `<home>/config` and `<home>/state`. This is the one to use
-   for tests and for the Herdr plugin front door, where `HERDR_PLUGIN_STATE_DIR` is handed to us.
+   for tests and for a throwaway install, because it moves both roots together.
 4. `XDG_CONFIG_HOME` / `XDG_STATE_HOME`, honoured **on all three platforms** (that is `xdg`'s
    behaviour, not the stdlib's, and it is what makes a temp-dir test possible on Windows).
 5. The table above.
 
-When herdr-cron runs as a Herdr plugin, `HERDR_PLUGIN_STATE_DIR` MUST be used as the state root:
-`HERDR_PLUGIN_ROOT` is replaced wholesale on every plugin update, so nothing durable may live
-under it (`docs/research/2026-09-02-herdr-plugin-integration.md` §1).
+`HERDR_PLUGIN_STATE_DIR` MUST NOT be consulted. **Corrected 2026-09-02 after running the
+released plugin** — this document previously required it as the state root, reasoning that
+`HERDR_PLUGIN_ROOT` is replaced wholesale on every plugin update so nothing durable may live
+under it (`docs/research/2026-09-02-herdr-plugin-integration.md` §1). The premise holds; the
+conclusion did not follow. The default state root of the table above is already outside
+`HERDR_PLUGIN_ROOT`, so honouring the variable protected nothing — and it broke the
+single-instance guarantee of §7.
+
+Observed: Herdr sets `HERDR_PLUGIN_STATE_DIR` for every `[[startup]]` hook, so the daemon Herdr
+started resolved `~/.local/state/herdr/plugins/huketo.herdr-cron` while a daemon started from a
+terminal resolved `~/.local/state/herdr-cron`. Both read the same `jobs.yaml`. `daemon.lock`
+lives in the state root (§7), so each held its own lock, both were live at once, and **every
+occurrence of a 15-second job executed twice** — for a `kind: agent` job, two agent runs and two
+bills per occurrence.
+
+The rule this establishes: **the state root MUST be a function of the machine, never of which
+front door started the process.** D4 says both front doors are the same binary over the same
+on-disk state; a state root that varies by launcher contradicts it. A deployment that genuinely
+wants an isolated root passes `--state-dir` or sets `HERDR_CRON_STATE_DIR`, which are explicit.
 
 ---
 

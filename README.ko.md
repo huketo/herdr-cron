@@ -138,7 +138,7 @@ herdr-cron status
 | macOS | `~/Library/Application Support/herdr-cron/config/jobs.yaml` | `~/Library/Application Support/herdr-cron/state` |
 | Windows | `%LocalAppData%\herdr-cron\config\jobs.yaml` | `%LocalAppData%\herdr-cron\state` |
 
-Windows에서 로밍 `AppData`가 아니라 `LocalAppData`를 쓰는 것은 의도된 선택입니다. 로밍으로 복제된 job 데이터베이스는 다른 기계에서 존재하지 않는 절대 경로를 향해 job을 발사합니다. `XDG_CONFIG_HOME`과 `XDG_STATE_HOME`은 세 플랫폼 모두에서 존중되고, `HERDR_CRON_CONFIG`·`HERDR_CRON_STATE_DIR`·`HERDR_CRON_HOME`이 그것을 덮으며, 플래그가 전부를 덮습니다. Herdr 아래에서는 `HERDR_PLUGIN_STATE_DIR`이 state root입니다. `HERDR_PLUGIN_ROOT`는 플러그인이 갱신될 때마다 통째로 교체되므로 그 아래에는 영속적인 것을 둘 수 없기 때문입니다.
+Windows에서 로밍 `AppData`가 아니라 `LocalAppData`를 쓰는 것은 의도된 선택입니다. 로밍으로 복제된 job 데이터베이스는 다른 기계에서 존재하지 않는 절대 경로를 향해 job을 발사합니다. `XDG_CONFIG_HOME`과 `XDG_STATE_HOME`은 세 플랫폼 모두에서 존중되고, `HERDR_CRON_CONFIG`·`HERDR_CRON_STATE_DIR`·`HERDR_CRON_HOME`이 그것을 덮으며, 플래그가 전부를 덮습니다. `HERDR_PLUGIN_STATE_DIR`은 의도적으로 무시합니다. state root는 기계에만 의존하고 어느 front door가 프로세스를 띄웠는지에는 의존하지 않아야 하며, 그래야 플러그인과 단독 CLI가 언제나 하나의 일정, 하나의 히스토리, 하나의 daemon lock을 공유합니다.
 
 두 종류의 job이 하나씩 든 완전한 파일입니다:
 

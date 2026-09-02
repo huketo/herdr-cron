@@ -122,14 +122,14 @@ func jobListCmd(g *globals) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			id := "cli:job:list"
-			loaded, _, state, ov, err := g.loadAll(id)
+			loaded, st, state, ov, err := g.loadAll(id)
 			if err != nil {
 				return err
 			}
 			res := jobListResult{
 				Type:        "job_list",
 				GeneratedAt: time.Now().Format(time.RFC3339),
-				Daemon:      daemonStatus{Status: "stopped"},
+				Daemon:      daemonBrief(st.Roots()),
 				Jobs:        []jobSummary{},
 			}
 			for _, j := range loaded.Jobs {
