@@ -1,0 +1,19 @@
+# Normalise every text file to LF in the repository and in the working tree.
+#
+# This is not cosmetic. skills/herdr-cron/**.md is compiled into the binary with
+# //go:embed, and `herdr-cron --skill` promises to print bytes identical to the
+# file on disk (docs/spec/08-agent-skill.md §2). A Windows checkout with the
+# default core.autocrlf would embed CRLF, so the same tag would ship a different
+# skill on different platforms — and the frontmatter parser, which anchors on
+# "---\n", would stop recognising its own document. That is exactly how the
+# first Windows CI run failed.
+#
+# It also keeps the .editorconfig `end_of_line = lf` rule true rather than
+# aspirational, and keeps `gofmt -l` from flagging a whole tree on Windows.
+* text=auto eol=lf
+
+# Binary, never touched.
+*.png binary
+*.ico binary
+*.gz binary
+*.zip binary

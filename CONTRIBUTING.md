@@ -22,7 +22,7 @@ bug — say which in the PR.
   the network.
 
 Nothing else is required. `make lint` and `make fmt` fetch their tools on demand
-through `go run`, pinned to gofumpt `v0.9.1` and golangci-lint `v2.6.2` — the same
+through `go run`, pinned to gofumpt `v0.9.1` and golangci-lint `v2.13.2` — the same
 versions CI uses — so there is no separate install step. The build is pure Go with
 `CGO_ENABLED=0` — no C toolchain, no cgo, no SQLite.
 
