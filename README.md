@@ -336,6 +336,7 @@ Bare `herdr-cron` on a TTY opens the human surface — three screens and a modal
 - **Job detail.** One read supplies the resolved job, its next five fire times, and its ten most recent runs, so opening a job costs one round trip rather than four. Buttons run, pause, and delete; delete opens a confirm modal with an opt-in purge checkbox and never deletes on the first click.
 - **Run history and output.** Runs with duration, status, trigger and exit code beside the captured log. `[copy]` puts the output on the system clipboard, which is the designed answer to mouse reporting killing native terminal selection.
 - **`m` toggles the mouse.** Turning reporting off restores your terminal's own selection and copy, and it is the fallback when a multiplexer swallows the events. The key binding is mandatory rather than a nicety: once mouse reporting is off the on-screen badge cannot be clicked, so the help bar advertises `m` at all times.
+- **Keyboard.** `tab` moves focus between the two panes of a screen, and the highlighted border is the pane the keys reach: `↑/↓` move a row or a line, `pgup/pgdn` a page, `home/end` the ends. A pane holding more than it shows says so on its last row — `▲ 42% ▼` for text, `▲ 3-14/40 ▼` for a list — so a pane with something below the fold is never mistaken for a finished one.
 
 Every mouse affordance has a keyboard equivalent in the help bar, and no destructive action is keyboard-only. The TUI owns no scheduler: quitting it, killing it, or closing the terminal has no effect on what runs.
 

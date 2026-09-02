@@ -12,7 +12,6 @@ import (
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
@@ -70,14 +69,15 @@ type Model struct {
 	showFullHelp  bool
 
 	snap     Snapshot
-	jobs     table.Model
+	jobs     rowList
 	detail   viewport.Model
-	runs     table.Model
+	runs     rowList
 	output   viewport.Model
 	runList  []*model.Run
 	selected string // job id
 	runIndex int
 
+	follow   bool   // screen 3 keeps the output pane pinned to the tail
 	focus    string // pane id holding keyboard focus
 	modal    *modal
 	status   string
@@ -111,18 +111,16 @@ func New(roots paths.Roots) *Model {
 		keys:    DefaultKeyMap(),
 		help:    help.New(),
 		mouseOn: true,
-		focus:   "pane.jobs",
 	}
-	m.jobs = table.New(table.WithFocused(true))
-	m.runs = table.New()
+	// Prose is wrapped before it reaches a viewport (wrapText), so the widgets keep
+	// their default hard-cut behaviour and every line they hold already fits.
 	m.detail = viewport.New()
 	m.output = viewport.New()
-	// Columns must exist before rows: table.SetRows renders immediately and indexes the
-	// column slice.
+
 	m.width, m.height = 80, 24
-	m.layout()
 	m.snap = Load(roots)
-	m.syncJobs()
+	m.setFocus("pane.jobs")
+	m.layout()
 	return m
 }
 
@@ -275,8 +273,128 @@ func onOff(b bool) string {
 	return "off"
 }
 
+// ---------------------------------------------------------------- focus
+
+// setFocus points keyboard focus at a pane. The highlighted border, the pane the
+// movement keys reach and the list that draws a bright cursor are all this one value, so
+// they cannot disagree (docs/spec/06-tui.md §1.3).
+func (m *Model) setFocus(id string) {
+	m.focus = id
+	m.jobs.Focus(id == "pane.jobs")
+	m.runs.Focus(id == "pane.runs")
+}
+
+// focusPanes is the tab order of the active screen.
+func (m *Model) focusPanes() [2]string {
+	switch m.screen {
+	case screenJobs:
+		return [2]string{"pane.jobs", "pane.detail"}
+	case screenDetail:
+		return [2]string{"pane.definition", "pane.runs"}
+	default:
+		return [2]string{"pane.runs", "pane.output"}
+	}
+}
+
+// cycleFocus is the `tab` binding. Without it the second pane of every screen was
+// unreachable from the keyboard: the job list took every key press, so the detail pane
+// beside it could not be scrolled at all.
+func (m *Model) cycleFocus() {
+	p := m.focusPanes()
+	if m.focus == p[0] {
+		m.setFocus(p[1])
+		return
+	}
+	m.setFocus(p[0])
+}
+
+// gotoScreen switches screens. Widget sizes are per-screen, so every transition re-runs
+// the layout; a screen rendering another screen's geometry is the bug this prevents.
+func (m *Model) gotoScreen(s screen, focus string) {
+	m.screen = s
+	m.follow = m.follow && s == screenRuns
+	m.setFocus(focus)
+	m.layout()
+}
+
+// ---------------------------------------------------------------- movement
+
+// moveFocused applies a movement binding to the pane that holds keyboard focus, and
+// reports whether it consumed the key.
+func (m *Model) moveFocused(msg tea.KeyPressMsg) bool {
+	switch m.focus {
+	case "pane.jobs":
+		if !moveList(&m.jobs, m.keys, msg) {
+			return false
+		}
+		m.syncJobs()
+		return true
+	case "pane.runs":
+		if !moveList(&m.runs, m.keys, msg) {
+			return false
+		}
+		m.runIndex = m.runs.Cursor()
+		m.syncRuns()
+		return true
+	case "pane.detail", "pane.definition":
+		return moveViewport(&m.detail, m.keys, msg)
+	case "pane.output":
+		return moveViewport(&m.output, m.keys, msg)
+	}
+	return false
+}
+
+// moveList and moveViewport implement the movement rows of the keymap table directly
+// rather than delegating to a widget's own bindings, so every screen answers the same
+// keys and no widget default can shadow one of herdr-cron's (docs/spec/06-tui.md §5).
+func moveList(l *rowList, k KeyMap, msg tea.KeyPressMsg) bool {
+	page := maxInt(1, l.Visible()-1)
+	switch {
+	case key.Matches(msg, k.Up):
+		l.Move(-1)
+	case key.Matches(msg, k.Down):
+		l.Move(1)
+	case key.Matches(msg, k.PageUp):
+		l.Move(-page)
+	case key.Matches(msg, k.PageDown):
+		l.Move(page)
+	case key.Matches(msg, k.Top):
+		l.GotoTop()
+	case key.Matches(msg, k.Bottom):
+		l.GotoBottom()
+	default:
+		return false
+	}
+	return true
+}
+
+func moveViewport(v *viewport.Model, k KeyMap, msg tea.KeyPressMsg) bool {
+	switch {
+	case key.Matches(msg, k.Up):
+		v.ScrollUp(1)
+	case key.Matches(msg, k.Down):
+		v.ScrollDown(1)
+	case key.Matches(msg, k.PageUp):
+		v.PageUp()
+	case key.Matches(msg, k.PageDown):
+		v.PageDown()
+	case key.Matches(msg, k.Top):
+		v.GotoTop()
+	case key.Matches(msg, k.Bottom):
+		v.GotoBottom()
+	default:
+		return false
+	}
+	return true
+}
+
+// ---------------------------------------------------------------- per-screen keys
+
 func (m *Model) keyJobs(msg tea.KeyPressMsg) tea.Cmd {
 	switch {
+	case key.Matches(msg, m.keys.NextPane):
+		m.cycleFocus()
+		return nil
 	case key.Matches(msg, m.keys.Open):
 		if id := m.cursorJob(); id != "" {
 			return m.openJob(id)
@@ -289,23 +407,21 @@ func (m *Model) keyJobs(msg tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(msg, m.keys.Cancel):
 		return m.cancelRun(m.cursorJob())
 	}
-	var cmd tea.Cmd
-	m.jobs, cmd = m.jobs.Update(msg)
-	m.syncDetail()
-	return cmd
+	m.moveFocused(msg)
+	return nil
 }
 
 func (m *Model) keyDetail(msg tea.KeyPressMsg) tea.Cmd {
 	switch {
+	case key.Matches(msg, m.keys.NextPane):
+		m.cycleFocus()
+		return nil
 	case key.Matches(msg, m.keys.Back):
-		m.screen = screenJobs
-		m.focus = "pane.jobs"
+		m.gotoScreen(screenJobs, "pane.jobs")
 		return nil
 	case key.Matches(msg, m.keys.Open):
-		if len(m.runList) > 0 {
-			m.screen = screenRuns
-			m.focus = "pane.runs"
-			m.syncOutput()
+		if m.runs.Len() > 0 {
+			m.gotoScreen(screenRuns, "pane.runs")
 		}
 		return nil
 	case key.Matches(msg, m.keys.ToggleEnabled):
@@ -318,36 +434,34 @@ func (m *Model) keyDetail(msg tea.KeyPressMsg) tea.Cmd {
 		m.openDeleteModal(m.selected)
 		return nil
 	}
-	var cmd tea.Cmd
-	if m.focus == "pane.runs" {
-		m.runs, cmd = m.runs.Update(msg)
-		m.runIndex = m.runs.Cursor()
-	} else {
-		m.detail, cmd = m.detail.Update(msg)
-	}
-	return cmd
+	m.moveFocused(msg)
+	return nil
 }
 
 func (m *Model) keyRuns(msg tea.KeyPressMsg) tea.Cmd {
 	switch {
+	case key.Matches(msg, m.keys.NextPane):
+		m.cycleFocus()
+		return nil
 	case key.Matches(msg, m.keys.Back):
-		m.screen = screenDetail
-		m.focus = "pane.runs"
+		m.gotoScreen(screenDetail, "pane.definition")
 		return nil
 	case key.Matches(msg, m.keys.RunNow):
 		return m.runNow(m.selected)
 	case key.Matches(msg, m.keys.Copy):
 		return m.copyOutput()
+	case key.Matches(msg, m.keys.Follow):
+		// The help bar advertises this key, so it has to do something: the output pane
+		// stays pinned to the tail while a run is still writing to its log.
+		m.follow = !m.follow
+		m.setStatus("follow " + onOff(m.follow))
+		if m.follow {
+			m.output.GotoBottom()
+		}
+		return nil
 	}
-	var cmd tea.Cmd
-	if m.focus == "pane.output" {
-		m.output, cmd = m.output.Update(msg)
-		return cmd
-	}
-	m.runs, cmd = m.runs.Update(msg)
-	m.runIndex = m.runs.Cursor()
-	m.syncOutput()
-	return cmd
+	m.moveFocused(msg)
+	return nil
 }
 
 // ---------------------------------------------------------------- actions
@@ -362,10 +476,9 @@ func (m *Model) cursorJob() string {
 
 func (m *Model) openJob(id string) tea.Cmd {
 	m.selected = id
-	m.screen = screenDetail
-	m.focus = "pane.definition"
 	m.runIndex = 0
-	m.syncDetail()
+	m.detail.GotoTop()
+	m.gotoScreen(screenDetail, "pane.definition")
 	return m.loadRuns(id)
 }
 

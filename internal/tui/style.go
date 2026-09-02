@@ -22,6 +22,14 @@ var (
 	styleFocused = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("39"))
 	styleButton  = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("238")).Padding(0, 1)
 	styleDanger  = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("124")).Padding(0, 1)
+
+	styleListHeader = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	// The cursor row is a background band, not a foreground colour: a cell keeps its own
+	// colour, and the band still reads on a row where every cell is coloured. The dim
+	// variant marks the cursor of a list that does not hold keyboard focus, so a reader
+	// can always see both where the cursor is and which pane the keys reach.
+	styleCursor     = lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("24"))
+	styleCursorBlur = lipgloss.NewStyle().Background(lipgloss.Color("236"))
 )
 
 // statusStyle maps every status of docs/spec/03-job-model.md §6 onto a colour.
@@ -46,48 +54,55 @@ func statusStyle(s model.Status) lipgloss.Style {
 	}
 }
 
-// enabledGlyph is the leading column of the job list: enabled, disabled by override, or
+// enabledCell is the leading column of the job list: enabled, disabled by override, or
 // disabled by the circuit breaker.
-func enabledGlyph(v JobView) string {
+func enabledCell(v JobView) cellText {
 	switch {
 	case v.AutoDisabled:
-		return styleBad.Render("⊘")
+		return cellText{"⊘", styleBad}
 	case !v.Enabled:
-		return styleDim.Render("○")
+		return cellText{"○", styleDim}
 	default:
-		return styleOK.Render("●")
+		return cellText{"●", styleOK}
 	}
 }
 
-func statusText(r *model.Run) string {
+func statusCell(r *model.Run) cellText {
 	if r == nil {
-		return styleDim.Render("—")
+		return cellText{"—", styleDim}
 	}
 	label := string(r.Status)
 	if r.Status == model.StatusNoOp {
 		label = "no-op"
 	}
-	return statusStyle(r.Status).Render(label)
+	return cellText{label, statusStyle(r.Status)}
 }
 
-// countdown renders a next-run instant the way a human reads a scheduler.
-func countdown(at time.Time) string {
+// statusText is the same status as prose, for the run output header, which is a string
+// rather than a cell.
+func statusText(r *model.Run) string {
+	c := statusCell(r)
+	return c.Style.Render(c.Text)
+}
+
+// countdownCell renders a next-run instant the way a human reads a scheduler.
+func countdownCell(at time.Time) cellText {
 	if at.IsZero() {
-		return styleDim.Render("—")
+		return cellText{"—", styleDim}
 	}
 	d := time.Until(at)
 	if d < 0 {
-		return styleDim.Render("due")
+		return cellText{"due", styleWarn}
 	}
 	switch {
 	case d < time.Minute:
-		return fmt.Sprintf("in %ds", int(d.Seconds()))
+		return text(fmt.Sprintf("in %ds", int(d.Seconds())))
 	case d < time.Hour:
-		return fmt.Sprintf("in %02d:%02d", int(d.Minutes()), int(d.Seconds())%60)
+		return text(fmt.Sprintf("in %02d:%02d", int(d.Minutes()), int(d.Seconds())%60))
 	case d < 24*time.Hour:
-		return fmt.Sprintf("in %dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+		return text(fmt.Sprintf("in %dh%02dm", int(d.Hours()), int(d.Minutes())%60))
 	default:
-		return at.Format("01-02 15:04")
+		return text(at.Format("01-02 15:04"))
 	}
 }
 
