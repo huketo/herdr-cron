@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/huketo/herdr-cron/compare/v0.1.3...v0.2.0) (2026-09-03)
+
+
+### Features
+
+* schedule one-shot jobs at an exact instant with a recorded lifecycle ([#10](https://github.com/huketo/herdr-cron/issues/10)) ([84117f6](https://github.com/huketo/herdr-cron/commit/84117f6ad46b9e92619bf8e0435866684a8f610f)), closes [#9](https://github.com/huketo/herdr-cron/issues/9)
+
+
+### Documentation
+
+* **ci:** record why release-PR checks never run ([#7](https://github.com/huketo/herdr-cron/issues/7)) ([0faa2d3](https://github.com/huketo/herdr-cron/commit/0faa2d32c1e623a7b5bfcc9cf4832ad6e3ccd07b))
+* record the main-branch ruleset as ADR-0005 ([#11](https://github.com/huketo/herdr-cron/issues/11)) ([eb986c9](https://github.com/huketo/herdr-cron/commit/eb986c99f46818b008ddcb2f8bdf4c49f7555f1c))
+
 ## [0.1.3](https://github.com/huketo/herdr-cron/compare/v0.1.2...v0.1.3) (2026-09-02)
 
 
