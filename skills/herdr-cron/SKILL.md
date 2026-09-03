@@ -163,7 +163,10 @@ anything; `--paused` authors a job that does not start firing yet.
   second. One-shot Jobs ignore Jitter and fire at their named instant.
 - Never set `max_consecutive_failures: 0`. Three consecutive `failure`, `timeout`, or `blocked`
   outcomes auto-disable a job on purpose; `job resume` clears it once the cause is fixed.
-- Keep `max_runs_per_day` at 24 or below for agent jobs. An agent run costs money.
+- Keep `max_runs_per_day` at 24 or below for agent jobs. An agent run costs money, and your own
+  `run-once` or `job run` verification runs spend the same daily allowance as the schedule's. Never
+  raise the cap to make room for them: revert any limit you raised for testing, and let the extra
+  runs skip with `limit_exceeded` until the next day.
 - Leave `catchup` on `latest` unless asked: a recurring Job replays exactly the most recently
   missed Occurrence after downtime, where `all` can replay many at once. A one-shot defaults to
   a one-hour window and records a missed instant even when policy refuses to run it.
