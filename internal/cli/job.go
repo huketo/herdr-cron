@@ -217,7 +217,7 @@ func nextRuns(j *model.Resolved, n int) []string {
 }
 
 func occurrences(j *model.Resolved, n int, jitter time.Duration) []string {
-	sch, err := scheduleFor(j)
+	sch, err := schedule.FromResolved(j.Schedule)
 	if err != nil {
 		return nil
 	}

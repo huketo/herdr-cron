@@ -375,6 +375,14 @@ For each enabled recurring job: read `state.lastScheduledAt`, enumerate occurren
 including the skipped record for an Occurrence outside the window or disabled catch-up. A crash
 mid-pass therefore re-runs at most the occurrences it had not yet claimed.
 
+`scheduledAt`, and therefore the watermark and the `runId` derived from it, is always the
+Occurrence — never the wall clock at the moment a scheduler handed the task over. A scheduler
+tick can arrive a few seconds early on a machine whose clock steps, and a watermark written
+before the Occurrence it just ran leaves that Occurrence inside the next pass's window, which
+replays a job that already ran. A fire is attributed to the last Occurrence at or before the
+clock, or to the one immediately ahead when the clock is early, within a tolerance of ten
+seconds; an interval schedule has no grid and keeps the clock it fired at.
+
 ### 4.3 Overlap
 
 The previous run of a job is still going when the next fires:

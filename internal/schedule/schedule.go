@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
+
+	"github.com/huketo/herdr-cron/internal/model"
 )
 
 // Spec is a parsed-but-unvalidated schedule.
@@ -166,4 +168,74 @@ func (s *Schedule) NextN(from time.Time, n int, jitter time.Duration) []time.Tim
 		cur = next
 	}
 	return out
+}
+
+// FireSkew bounds how far the wall clock at fire time may sit from the Occurrence the fire
+// belongs to. gocron's timer has been observed tripping several seconds early on a machine
+// whose clock steps — a VM syncing NTP, a laptop resuming — and a task can equally be handed
+// over a little late.
+const FireSkew = 10 * time.Second
+
+// Occurrence names the scheduled instant that a fire at now belongs to, which is what the
+// catch-up watermark and the run id must record. The wall clock is not it: a watermark written
+// six seconds before the Occurrence it just ran leaves that Occurrence looking missed, and the
+// next reconciliation pass replays a job that already ran, which for kind: agent is a paid
+// invocation the author never asked for (issue #12).
+//
+// A cron schedule is snapped to its own grid: the last Occurrence at or before now, or the one
+// just ahead when the fire came in early. A one-time schedule is its instant exactly. An
+// interval schedule reports false, because "every 30m" is measured from the last run and has no
+// grid to snap to; the caller keeps the clock it already has.
+func (s *Schedule) Occurrence(now time.Time) (time.Time, bool) {
+	if !s.at.IsZero() {
+		return s.at, true
+	}
+	if s.cron == nil {
+		return time.Time{}, false
+	}
+	// Next is strictly-after, so the walk starts just outside the window it may claim.
+	cur, ok := s.Next(now.Add(-FireSkew - time.Second))
+	if !ok {
+		return time.Time{}, false
+	}
+	var last time.Time
+	for !cur.After(now) {
+		last = cur
+		next, ok := s.Next(cur)
+		if !ok {
+			break
+		}
+		cur = next
+	}
+	if !last.IsZero() {
+		return last.In(s.spec.Location), true
+	}
+	// Nothing has come due yet, so this is an early fire for the Occurrence just ahead.
+	// Anything further out is not a fire this schedule can explain.
+	if cur.Sub(now) <= FireSkew {
+		return cur.In(s.spec.Location), true
+	}
+	return time.Time{}, false
+}
+
+// FromResolved builds a Schedule from a job that config.Load has already resolved. Every caller
+// that answers "when does this fire" goes through here, so the CLI's prediction, the TUI's
+// countdown and the daemon's own arithmetic cannot drift apart.
+func FromResolved(rs model.ResolvedSchedule) (*Schedule, error) {
+	loc, err := LoadLocation(rs.Timezone)
+	if err != nil {
+		return nil, err
+	}
+	spec := Spec{Location: loc}
+	switch rs.Type {
+	case "cron":
+		spec.Cron = rs.Expression
+	case "every":
+		spec.Every = time.Duration(rs.EverySec) * time.Second
+	case model.ScheduleAt:
+		spec.At = rs.At
+	default:
+		return nil, fmt.Errorf("unknown schedule type %q", rs.Type)
+	}
+	return Parse(spec)
 }

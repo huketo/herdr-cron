@@ -347,7 +347,15 @@ func (d *Daemon) fire(jobID string) {
 		return
 	}
 	ctx := d.baseContext()
+	// The Occurrence, not the clock that happened to trip. Recording the clock made a fire
+	// that arrived early look like a miss, so the next reconciliation pass replayed a job
+	// that had already run (issue #12).
 	scheduled := time.Now().Truncate(time.Second)
+	if sch, err := schedule.FromResolved(j.Schedule); err == nil {
+		if occ, ok := sch.Occurrence(scheduled); ok {
+			scheduled = occ
+		}
+	}
 	if j.Schedule.JitterSec > 0 {
 		t := time.NewTimer(time.Duration(j.Schedule.JitterSec) * time.Second)
 		defer t.Stop()
@@ -543,20 +551,10 @@ func (d *Daemon) reconcileOneShots(ctx context.Context) {
 }
 
 func (d *Daemon) occurrences(j *model.Resolved, from, to time.Time) []time.Time {
-	loc, err := schedule.LoadLocation(j.Schedule.Timezone)
-	if err != nil {
-		return nil
-	}
-	spec := schedule.Spec{Location: loc}
-	switch j.Schedule.Type {
-	case "cron":
-		spec.Cron = j.Schedule.Expression
-	case "every":
-		spec.Every = time.Duration(j.Schedule.EverySec) * time.Second
-	default:
+	if j.Schedule.OneShot() {
 		return nil // a one-time job has nothing to replay
 	}
-	sch, err := schedule.Parse(spec)
+	sch, err := schedule.FromResolved(j.Schedule)
 	if err != nil {
 		return nil
 	}
