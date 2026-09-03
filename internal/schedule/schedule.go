@@ -9,6 +9,7 @@ package schedule
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -42,6 +43,64 @@ func LoadLocation(name string) (*time.Location, error) {
 		return nil, fmt.Errorf("unknown timezone %q", name)
 	}
 	return loc, nil
+}
+
+// Form names the schedule form an expression resolved to. The values are the ones
+// model.ResolvedSchedule.Type carries, so a caller never translates between two vocabularies.
+const (
+	FormCron  = "cron"
+	FormEvery = "every"
+	FormAt    = "at"
+)
+
+// ParseExpr disambiguates one schedule expression by shape and is the only place that does
+// it: the CLI's --schedule, the jobs.yaml writer, and validate all resolve the same text the
+// same way (docs/spec/05-cli.md §3.1).
+//
+// A leading "+" is a relative one-shot ("+2h") and is normalised here into the absolute
+// instant it means. Relative text is never stored: jobs.yaml is re-read on every reload, so a
+// stored "+2h" would re-anchor to each reload and never arrive. The "+" prefix is also why
+// this check runs before the duration form — time.ParseDuration accepts "+2h" happily, and
+// "run this once in two hours" silently becoming "run this every two hours" is the worst
+// available outcome.
+func ParseExpr(expr string, now time.Time, loc *time.Location) (Spec, string, error) {
+	if loc == nil {
+		loc = time.Local
+	}
+	s := Spec{Location: loc}
+	switch {
+	case strings.HasPrefix(expr, "@"):
+		s.Cron = expr
+		return s, FormCron, nil
+	case strings.HasPrefix(expr, "+"):
+		d, err := time.ParseDuration(expr)
+		if err != nil {
+			return s, "", fmt.Errorf("invalid relative instant %q: expected a duration after the +, e.g. +2h", expr)
+		}
+		if d <= 0 {
+			return s, "", fmt.Errorf("invalid relative instant %q: must be a positive duration", expr)
+		}
+		s.At = now.In(loc).Add(d).Truncate(time.Second).Format(time.RFC3339)
+		return s, FormAt, nil
+	case isInstant(expr):
+		s.At = expr
+		return s, FormAt, nil
+	case !strings.ContainsAny(expr, " \t"):
+		d, err := time.ParseDuration(expr)
+		if err != nil {
+			return s, "", fmt.Errorf("%q is neither a duration nor a cron expression", expr)
+		}
+		s.Every = d
+		return s, FormEvery, nil
+	default:
+		s.Cron = expr
+		return s, FormCron, nil
+	}
+}
+
+func isInstant(v string) bool {
+	_, err := time.Parse(time.RFC3339, v)
+	return err == nil
 }
 
 // Parse validates a spec.

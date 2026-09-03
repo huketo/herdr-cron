@@ -125,11 +125,15 @@ func yamlMessage(err error) string {
 const (
 	defTimeout       = 30 * time.Minute
 	defCatchupWindow = 168 * time.Hour
-	defRetryInitial  = 60 * time.Second
-	defRetryMaxInt   = 30 * time.Minute
-	defMaxConsecFail = 3
-	defAgentRunsDay  = 24
-	maxJitter        = 30 * time.Minute
+	// A one-shot's catch-up window is an hour, not a week. A missed recurrence replayed
+	// late is early for the next one; a one-time "back up before the demo" replayed three
+	// days later is an agent let loose on a repository nobody is watching any more.
+	defOneShotCatchupWindow = time.Hour
+	defRetryInitial         = 60 * time.Second
+	defRetryMaxInt          = 30 * time.Minute
+	defMaxConsecFail        = 3
+	defAgentRunsDay         = 24
+	maxJitter               = 30 * time.Minute
 )
 
 func resolve(j *model.Job, d *model.Defaults) (*model.Resolved, []Issue, []Issue) {
@@ -222,7 +226,11 @@ func resolve(j *model.Job, d *model.Defaults) (*model.Resolved, []Issue, []Issue
 		bad("schedule.catchup", "must be off, latest, or all")
 	}
 
-	cw := defTimeoutOr(j.Schedule.CatchupWindow, defDur(d, func(x *model.Defaults) *model.Duration { return x.CatchupWindow }), defCatchupWindow)
+	fallbackWindow := defCatchupWindow
+	if r.Schedule.OneShot() {
+		fallbackWindow = defOneShotCatchupWindow
+	}
+	cw := defTimeoutOr(j.Schedule.CatchupWindow, defDur(d, func(x *model.Defaults) *model.Duration { return x.CatchupWindow }), fallbackWindow)
 	r.Schedule.CatchupWindowSec = int64(cw / time.Second)
 
 	jitterSpec := firstNonEmpty(j.Schedule.Jitter, defStr(d, func(x *model.Defaults) string { return x.Jitter }), "auto")
@@ -238,6 +246,16 @@ func resolve(j *model.Job, d *model.Defaults) (*model.Resolved, []Issue, []Issue
 		} else {
 			r.Schedule.JitterSec = int64(v / time.Second)
 		}
+	}
+	// Jitter spreads a herd of jobs that share a cron minute. A one-shot names one instant
+	// on purpose, and moving it is a bug the author cannot see: 18:00 fired at 18:23, with
+	// validate predicting 18:00 because it never applied the offset.
+	if r.Schedule.OneShot() && r.Schedule.JitterSec != 0 {
+		if jitterSpec != "auto" {
+			warn("jitter_ignored", "schedule.jitter",
+				"a one-time schedule fires at the instant it names; jitter is ignored")
+		}
+		r.Schedule.JitterSec = 0
 	}
 
 	// Kind and payload.
@@ -400,7 +418,6 @@ func resolveLimits(j, d *model.Limits, kind model.Kind) model.ResolvedLimits {
 	}
 	return out
 }
-
 func resolveNotify(j, d *model.Notify) model.ResolvedNotify {
 	out := model.ResolvedNotify{On: []string{"failure", "blocked", "auto_disabled"}}
 	for _, n := range []*model.Notify{d, j} {
@@ -416,19 +433,20 @@ func resolveNotify(j, d *model.Notify) model.ResolvedNotify {
 	}
 	return out
 }
-
 func defRetry(d *model.Defaults) *model.Retry {
 	if d == nil {
 		return nil
 	}
 	return d.Retry
 }
+
 func defLimits(d *model.Defaults) *model.Limits {
 	if d == nil {
 		return nil
 	}
 	return d.Limits
 }
+
 func defNotify(d *model.Defaults) *model.Notify {
 	if d == nil {
 		return nil
