@@ -86,6 +86,38 @@ herdr-cron run logs nightly-deps-20260901T181700Z --tail 200
 
 Everything above prints JSON on stdout. Add `-o text` for the human rendering, which carries no compatibility promise.
 
+## Schedule one occurrence
+
+Use a `+` prefix for a time relative to now, or supply an RFC 3339 instant:
+
+```sh
+herdr-cron job add --id demo-backup --schedule "+2h" --command "..."
+# Or name the absolute instant directly:
+herdr-cron job add --id demo-backup --schedule "2026-12-24T18:00:00+09:00" --command "..."
+```
+
+These two commands are alternatives for the same Job. `+2h` is resolved once and stored as an
+absolute instant; `2h` without the `+` creates a repeating Job. An absolute instant that is
+already past is rejected as a usage error. A one-shot has no Jitter, so the instant shown by
+`job get` is the instant at which it runs.
+
+If the daemon was down when that instant passed, the default one-hour catch-up window still runs
+the Occurrence with `trigger: "catchup"`. An older Occurrence is recorded as `skipped` with
+reason `missed_window`; `catchup: off` records `skipped` with reason `catchup_off`. No missed
+one-shot disappears without a Run explaining what happened.
+
+Once the Occurrence is claimed for execution or recorded as skipped, `job get` and the Job's
+`job list` summary report `completed: true`. It means the one Occurrence is spent, not that its
+Run necessarily succeeded. The field appears only for one-shot Jobs and is derived from
+`state.json`; herdr-cron never edits `jobs.yaml` to mark completion. Inspect the history, then
+remove the definition explicitly when it is no longer useful:
+
+```sh
+herdr-cron job get demo-backup
+herdr-cron run list --job demo-backup --status all
+herdr-cron job rm demo-backup --yes
+```
+
 ## How it runs your jobs
 
 One primitive executes work, and only it:
@@ -214,18 +246,18 @@ Exactly one of three schedule forms per job:
 | --- | --- | --- |
 | `cron` | `cron: "17 3 * * 1-5"` | 5 or 6 fields (6 puts seconds first). Descriptors `@daily`, `@hourly`, `@weekly`, … are accepted; `@reboot` is rejected. A `CRON_TZ=` prefix inside the expression beats the `timezone` field. |
 | `every` | `every: 30m` | Fixed interval, measured from the scheduler's start or from `start_at`. |
-| `at` | `at: 2026-12-24T18:00:00+09:00` | One absolute instant. After it fires, the job is complete and is never scheduled again. |
+| `at` | `at: 2026-12-24T18:00:00+09:00` | One absolute Occurrence. Once it is claimed for execution or recorded as skipped, `completed` is derived from `state.json` and it is never scheduled again; `jobs.yaml` is unchanged. |
 
-The same three shapes go into one flag on the CLI — a cron expression, a descriptor, a duration, or an RFC 3339 instant — disambiguated by shape, because an agent forced to choose between three flags will choose wrong.
+The same three shapes go into one flag on the CLI — a cron expression, a descriptor, a duration, an RFC 3339 instant, or a `+`-prefixed relative instant — disambiguated by shape, because an agent forced to choose between three flags will choose wrong. Relative instants are normalised to RFC 3339 when written.
 
 ## Safety defaults
 
 Read this before you leave it running unattended. Every default below is chosen to cost you money slowly rather than quickly.
 
-- **Jitter is on (`jitter: auto`).** The offset is `FNV1a64(job.id) mod min(interval/2, 30m)` — deterministic, so the same job always starts at the same second and the predicted next run stays honest. It exists because six agent jobs at `0 9 * * *` would otherwise launch six agents into the same repository in the same second. Jitter never applies to a manual run.
+- **Jitter is on for recurring Jobs (`jitter: auto`).** The offset is `FNV1a64(job.id) mod min(interval/2, 30m)` — deterministic, so the same Job always starts at the same second and the predicted next run stays honest. It exists because six agent jobs at `0 9 * * *` would otherwise launch six agents into the same repository in the same second. Jitter never applies to a manual run or a one-shot; an `at` schedule fires at the instant it names.
 - **`max_runs_per_day` defaults to 24 for agent jobs and 0 (unlimited) for shell jobs.** The asymmetry is intentional: a shell job is nearly free and an agent job is not. Exceeding the limit records a `skipped` run with reason `limit_exceeded`, so the refusal is visible in history rather than silent.
 - **`max_consecutive_failures: 3` auto-disables a job.** Three consecutive `failure`, `timeout` or `blocked` outcomes flip an override to disabled with `disabledReason: auto_failures` and fire a notification. `herdr-cron job resume` clears it. This is the money circuit breaker, and it is a deliberate invention — no surveyed scheduler has one, and the two hosted products that needed it bolted it on afterwards.
-- **`catchup: latest`, window 168h.** After downtime, exactly one run for the most recently missed occurrence; anything older is discarded. `off` and `all` exist per job. Twenty seconds of downtime on a five-second job produces one catch-up run, not four — and opening a laptop after a weekend does not launch a queue of agents into one repo.
+- **`catchup: latest`; the window is 1h for a one-shot and 168h otherwise.** After downtime, recurring Jobs run exactly once for the most recently missed Occurrence and discard anything older; `off` and `all` exist per Job. Twenty seconds of downtime on a five-second Job produces one catch-up Run, not four. A one-shot inside its window runs once, while one outside it is recorded `skipped` / `missed_window` so the omission is never silent.
 - **`concurrency: skip`.** An occurrence arriving while the previous run is still going is recorded as a `skipped` run with reason `overlap`, not dropped. Recording it is what makes "why did this not run at 03:00" answerable at all.
 - **Every agent prompt gets a preamble, and it is not configurable.** Prepended verbatim, before your text:
 

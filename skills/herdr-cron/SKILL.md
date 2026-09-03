@@ -1,6 +1,6 @@
 ---
 name: herdr-cron
-description: "Schedule and inspect automated work with the herdr-cron CLI: cron jobs, recurring shell commands, and scheduled coding-agent prompts. Use when the user asks to schedule, automate, or run something nightly, hourly, or on a cron; to list, add, edit, pause, or delete scheduled jobs; to check why a scheduled job did not run; or to read a job's run history or logs. Requires the herdr-cron binary on PATH."
+description: "Schedule and inspect automated work with the herdr-cron CLI: one-time or recurring shell commands and scheduled coding-agent prompts. Use when the user asks to schedule, delay, or automate work; to run something once at a future time, nightly, hourly, or on a cron; to list, add, edit, pause, or delete scheduled jobs; to check why a scheduled job did not run; or to read a job's run history or logs. Requires the herdr-cron binary on PATH."
 allowed-tools: Bash
 license: MIT
 ---
@@ -99,8 +99,28 @@ herdr-cron validate --schedule "17 3 * * 1-5" --next 5
 This parses through the same code the daemon uses and prints the next five fire times; read them
 back and confirm they are what the user asked for. With no `--schedule` it validates the whole
 `jobs.yaml`. `--schedule` accepts all three shapes: a cron expression (`"17 3 * * 1-5"`, or a
-descriptor such as `@daily`), a duration for a fixed interval (`30m`), or an RFC 3339 instant
-for a one-time run (`2026-12-24T18:00:00+09:00`). `@reboot` is rejected.
+descriptor such as `@daily`), a duration for a fixed interval (`30m`), or one instant as either
+RFC 3339 (`2026-12-24T18:00:00+09:00`) or a `+`-prefixed relative value (`+2h`). `@reboot` is
+rejected.
+
+## Schedule one occurrence
+
+When the user asks for work to run once, use one of these two forms:
+
+```bash
+herdr-cron job add --id demo-backup --schedule "+2h" --command "..."
+herdr-cron job add --id demo-backup --schedule "2026-12-24T18:00:00+09:00" --command "..."
+```
+
+They are alternatives for the same Job. The relative form is resolved once and stored as an
+absolute instant. **Never write `--schedule 2h` for one-time work:** without `+`, a duration is
+a repeating Job. An instant already in the past is a usage error.
+
+A one-shot has no Jitter and runs at the instant it names. Read `job get`'s
+`result.completed`: `false` means its Occurrence is pending, while `true` means it was claimed
+for execution or accounted for as skipped, not that the Run necessarily succeeded. If it did
+not execute, use `run list` followed by `run get` and inspect the Run's `reason`;
+`missed_window` and `catchup_off` explain the two one-shot catch-up refusals.
 
 ## Add a job
 
@@ -138,13 +158,15 @@ anything; `--paused` authors a job that does not start firing yet.
 
 ## Safety rules that always apply
 
-- Leave `jitter` on `auto`. It staggers jobs that share a fire time; six agent jobs at
-  `0 9 * * *` would otherwise start six agents in the same repository in the same second.
+- Leave `jitter` on `auto` for recurring Jobs. It staggers Jobs that share a fire time; six
+  agent Jobs at `0 9 * * *` would otherwise start six agents in the same repository in the same
+  second. One-shot Jobs ignore Jitter and fire at their named instant.
 - Never set `max_consecutive_failures: 0`. Three consecutive `failure`, `timeout`, or `blocked`
   outcomes auto-disable a job on purpose; `job resume` clears it once the cause is fixed.
 - Keep `max_runs_per_day` at 24 or below for agent jobs. An agent run costs money.
-- Leave `catchup` on `latest` unless asked: it replays exactly the most recently missed
-  occurrence after downtime, where `all` can replay many at once.
+- Leave `catchup` on `latest` unless asked: a recurring Job replays exactly the most recently
+  missed Occurrence after downtime, where `all` can replay many at once. A one-shot defaults to
+  a one-hour window and records a missed instant even when policy refuses to run it.
 - Do not raise `retry.max_attempts` to work around a `blocked` run. Blocked is terminal.
 - Prefer `job pause` to `job rm`; pausing leaves the user's authored YAML untouched. Never
   delete a job you did not create, and never pass `--purge` — which destroys run history and
@@ -165,9 +187,11 @@ herdr-cron run logs <run-id> --tail 200
 - `job get` shows the effective `enabled`, `enabledSource`, `nextRunAt`, and
   `state.consecutiveFailures`. `enabledSource: "override"` means someone paused it or the
   circuit breaker fired.
-- A `skipped` run always carries a `reason`: `overlap`, `limit_exceeded`, `disabled`,
-  `catchup_capped`, or `superseded`. That field answers "why did this not run at 03:00".
-- No run record at all means the schedule never fired; re-check it with `validate --schedule`.
+- A `skipped` Run always carries a `reason`: `overlap`, `limit_exceeded`, `disabled`,
+  `catchup_capped`, `superseded`, `missed_window`, or `catchup_off`. That field answers "why did
+  this not run at 03:00".
+- No Run record at all means the schedule has not fired or been reconciled; re-check it with
+  `validate --schedule` and inspect daemon liveness in `status`.
 
 ## Reference files
 
