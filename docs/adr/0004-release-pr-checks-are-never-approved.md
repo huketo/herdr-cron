@@ -32,7 +32,7 @@ The documented escape is a credential: "use a GitHub App installation access tok
 
 **`release-please` keeps `secrets.GITHUB_TOKEN`, and the red X on the release pull request is accepted as noise.**
 
-**`main` therefore stays unprotected, and no status check may be made required.** A required check on `main` would deadlock every release: the check can never report on a pull request whose runs are never approved, so the release pull request could never be merged and no tag would ever be pushed. Wanting required checks means switching the token first — a GitHub App installation token in preference to a personal access token, since it is scoped to this repository and rotates itself.
+**No status check on `main` may be made required.** A required check on `main` would deadlock every release: the check can never report on a pull request whose runs are never approved, so the release pull request could never be merged and no tag would ever be pushed. Wanting required checks means switching the token first — a GitHub App installation token in preference to a personal access token, since it is scoped to this repository and rotates itself. `main` was left entirely unprotected when this was written; it is now protected by a ruleset that carries no status-check rule, for this reason ([ADR-0005](0005-main-is-protected-by-a-ruleset.md)).
 
 ## Consequences
 

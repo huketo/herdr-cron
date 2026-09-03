@@ -21,7 +21,9 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 │   ├── 0001-run-once-core-with-three-drivers.md
 │   ├── 0002-files-only-ipc.md
 │   ├── 0003-agent-skill-distribution.md
-│   └── 0004-release-pr-checks-are-never-approved.md
+│   ├── 0004-release-pr-checks-are-never-approved.md
+│   ├── 0005-main-is-protected-by-a-ruleset.md
+│   └── 0006-one-shot-jobs-are-at-jobs-with-a-lifecycle.md
 ├── docs/spec/          normative — read README.md first
 ├── docs/research/      evidence — primary sources, pinned
 ├── internal/
