@@ -95,8 +95,11 @@ func TestFireRecordsTheOccurrenceNotTheClock(t *testing.T) {
 	if !js.LastScheduledAt.Equal(*at) {
 		t.Errorf("watermark = %s, want the occurrence %s", js.LastScheduledAt, at)
 	}
-	// The watermark now sits on the Occurrence, so nothing between it and now is missing.
-	if got := d.occurrences(d.job("tick"), *js.LastScheduledAt, time.Now()); len(got) != 0 {
+	// The watermark now sits on the Occurrence, so the Occurrence just fired cannot be replayed.
+	// Bound the window with that Occurrence instead of the clock. A slow machine crosses the next
+	// five-second boundary before this line, and replaying an Occurrence that came due after the
+	// fire is correct catch-up rather than the regression this test guards.
+	if got := d.occurrences(d.job("tick"), *js.LastScheduledAt, at.Add(time.Nanosecond)); len(got) != 0 {
 		t.Errorf("catch-up would replay %d occurrence(s) the scheduler just ran: %v", len(got), got)
 	}
 }
