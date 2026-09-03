@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/huketo/herdr-cron/compare/v0.2.1...v0.2.2) (2026-09-03)
+
+
+### Documentation
+
+* **skill:** warn that manual runs spend the daily cap ([#16](https://github.com/huketo/herdr-cron/issues/16)) ([089ec08](https://github.com/huketo/herdr-cron/commit/089ec0814fda04d1004d98c5c3c54d5c69ad9b21))
+
 ## [0.2.1](https://github.com/huketo/herdr-cron/compare/v0.2.0...v0.2.1) (2026-09-03)
 
 
