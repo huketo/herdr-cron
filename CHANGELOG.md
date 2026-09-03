@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/huketo/herdr-cron/compare/v0.2.0...v0.2.1) (2026-09-03)
+
+
+### Bug fixes
+
+* **daemon:** attribute runs to their occurrence and start the heartbeat first ([#14](https://github.com/huketo/herdr-cron/issues/14)) ([51d0956](https://github.com/huketo/herdr-cron/commit/51d0956f379d75ebbd1a660777a3b810e988377d))
+
 ## [0.2.0](https://github.com/huketo/herdr-cron/compare/v0.1.3...v0.2.0) (2026-09-03)
 
 
