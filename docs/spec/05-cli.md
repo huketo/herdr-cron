@@ -95,8 +95,8 @@ set:
 
 | Command | `result.type` | Payload |
 | --- | --- | --- |
-| `job list` | `job_list` | `generatedAt`, `daemon`, `jobs[]` (summary records) |
-| `job get` | `job` | `job` (full resolved record), `nextRuns[]`, `recentRuns[]` |
+| `job list` | `job_list` | `generatedAt`, `daemon`, `jobs[]` (summary records; one-shot records also carry `completed`) |
+| `job get` | `job` | `job` (full resolved record), `completed` for a one-shot, `nextRuns[]`, `recentRuns[]` |
 | `job add`, `job update` | `job_written` | `job`, `warnings[]` |
 | `job rm` | `job_removed` | `id`, `purged` (bool) |
 | `job pause`, `job resume` | `job_enabled_changed` | `id`, `enabled`, `enabledSource`, `reason` |
@@ -180,9 +180,12 @@ herdr-cron job cancel <job-id>
 ```
 
 - `--schedule` accepts everything §2 of [`03-job-model.md`](03-job-model.md) accepts: a cron
-  expression, a descriptor (`@daily`), a duration (`30m` → `every`), or an RFC 3339 instant
-  (→ `at`). One flag, disambiguated by shape, because an agent that has to choose between
-  `--cron`, `--every`, and `--at` will choose wrong.
+  expression, a descriptor (`@daily`), a duration (`30m` → `every`), an RFC 3339 instant
+  (→ `at`), or a `+`-prefixed relative instant (`+2h` → `at`). A relative instant is resolved
+  once and stored as RFC 3339, never as `+2h`, so reloading cannot move it forward. A bare `2h`
+  remains a repeating `every` schedule. `job add` and `job update` reject an `at` instant that
+  is already past as a `usage` error (exit 2). One flag is disambiguated by shape because an
+  agent that has to choose between `--cron`, `--every`, and `--at` will choose wrong.
 - `--command` implies `kind: shell`; `--prompt` implies `kind: agent`. Supplying both is a usage
   error.
 - `--dry-run` validates and prints the resolved job plus its next five fire times, and writes
@@ -220,6 +223,19 @@ herdr-cron job cancel <job-id>
           "durationSec": 1461
         },
         "consecutiveFailures": 0
+      },
+      {
+        "id": "demo-backup",
+        "name": "demo-backup",
+        "kind": "shell",
+        "enabled": true,
+        "enabledSource": "file",
+        "schedule": {"type": "at", "at": "2026-12-24T18:00:00+09:00", "timezone": "Asia/Seoul"},
+        "tags": [],
+        "nextRunAt": "2026-12-24T18:00:00+09:00",
+        "lastRun": null,
+        "consecutiveFailures": 0,
+        "completed": false
       }
     ]
   }
@@ -228,8 +244,12 @@ herdr-cron job cancel <job-id>
 
 `job get` returns the full resolved record of `03-job-model.md` §1.3 under
 `result.job`, plus `result.nextRuns` (five instants) and `result.recentRuns` (ten run records).
-One call is enough to render a whole detail screen; this is deliberate, because a TUI opening a
-job should not need four round trips.
+For a one-shot it also returns `result.completed`: `false` while its single Occurrence is pending
+and `true` once the `state.json` catch-up watermark has spent that Occurrence by claiming it for
+execution or recording why it was skipped. Each one-shot summary in `job list` carries the same
+field.
+Recurring jobs omit `completed` at both levels. One call is enough to render a whole detail
+screen; this is deliberate, because a TUI opening a job should not need four round trips.
 
 ### 3.2 Runs
 

@@ -191,7 +191,7 @@ Exactly one of `cron`, `every`, or `at` MUST be present.
 | --- | --- | --- |
 | `cron` | `"17 3 * * 1-5"` | Standard cron. 5 or 6 fields; with 6, the first is seconds. Descriptors `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight`, `@hourly` are accepted. `@reboot` is REJECTED. |
 | `every` | `30m` | Fixed interval from the daemon's start (or from `start_at` when given). |
-| `at` | `2026-12-24T18:00:00+09:00` | One-time run at an absolute instant. After it fires the job is recorded `completed` and is never scheduled again. |
+| `at` | `2026-12-24T18:00:00+09:00` | One absolute Occurrence. Once it is claimed for execution or recorded as skipped, `completed` is derived from the `state.json` catch-up watermark and it is never scheduled again. `jobs.yaml` is never changed automatically. |
 
 Backing implementation: gocron v2 `CronJob(spec, withSeconds=true)`, `DurationJob`, and
 `OneTimeJob`. `withSeconds` is always true because robfig's `SecondOptional` parser still accepts
@@ -208,7 +208,7 @@ Additional schedule fields:
 | `start_at` | unset | Job is not scheduled before this instant. |
 | `stop_at` | unset | Job is not scheduled after this instant. Reaching it does not disable the job; it just stops producing occurrences. |
 | `catchup` | `latest` | `off` \| `latest` \| `all`. See §4.1. |
-| `catchup_window` | `168h` | How far back `latest`/`all` will look. |
+| `catchup_window` | `1h` for `at`; `168h` otherwise | How far back `latest`/`all` will look. A one-shot tied to a particular moment becomes unsafe or irrelevant sooner than a recurrence whose next Occurrence is still ahead. |
 | `jitter` | `auto` | `auto`, `off`, or a duration. See §2.1. |
 
 ### 2.1 Jitter
@@ -228,9 +228,14 @@ honest and makes the TUI's countdown stable. This follows Claude Code's task-id-
 Claude Desktop's deterministic per-task offset, and systemd's `RandomizedDelaySec=` +
 `FixedRandomDelay=` (all cited in `docs/research/2026-09-02-prior-art-and-domain-model.md` Q8).
 
-Jitter is applied to `scheduler` and `catchup` triggers. It is NEVER applied to `manual`.
-`nextRunAt` in the JSON always reports the **jittered** instant, because that is when the job will
-actually run.
+For recurring schedules, Jitter is applied to `scheduler` and `catchup` triggers. It is NEVER
+applied to `manual`. `nextRunAt` in the JSON reports the **jittered** instant, because that is
+when a recurring job will actually run.
+
+An `at` schedule is never jittered, regardless of trigger: it names one instant deliberately,
+and moving that instant would make both the definition and `nextRunAt` dishonest. Its resolved
+`jitterSec` is always `0`; an explicitly supplied `jitter` is ignored and produces a
+`jitter_ignored` warning.
 
 ---
 
@@ -331,7 +336,7 @@ The daemon was off, or the machine slept. On start, and on every wake, the recon
 
 | `catchup` | Behaviour |
 | --- | --- |
-| `off` | Nothing. The next occurrence is computed from now. |
+| `off` | No recurring Occurrence is replayed. A passed one-time Occurrence is still recorded as `skipped` with reason `catchup_off`, so the refusal is visible and is not reconsidered on every reload. |
 | `latest` | **Default.** Exactly one run, for the most recently missed occurrence, discarding older ones. Only if that occurrence is within `catchup_window`. |
 | `all` | Every missed occurrence within `catchup_window`, in chronological order, serialised (never in parallel), each subject to `limits`. Capped at 100 runs per job per pass; the overflow is recorded once as a `skipped` run with reason `catchup_capped`. |
 
@@ -346,6 +351,17 @@ Catch-up runs carry `trigger: "catchup"` and a deterministic `runId` derived fro
 already exists for that id is skipped. This is dagu's `GenerateCatchupRunID` idea
 (`prior-art` §1.1).
 
+An `at` schedule has exactly one Occurrence, so reconciliation applies a total rule to it. If
+the pending instant is within `catchup_window`, it executes with `trigger: "catchup"`. If it is
+older than the window, reconciliation records `skipped` / `missed_window`; if `catchup` is
+`off`, it records `skipped` / `catchup_off` instead. `latest` and `all` are indistinguishable
+for one Occurrence. Being claimed for execution and both skipped outcomes advance
+`state.lastScheduledAt`, which is also the source of the one-shot's derived `completed` field.
+
+Reconciliation runs at scheduler start, after a `jobs.yaml` reload, and when a wall-clock jump
+is detected. It first checks the watermark, so repeating any of those passes neither executes
+nor records the same one-time Occurrence twice.
+
 ### 4.2 Reconciliation pass
 
 Runs at daemon start, after a `jobs.yaml` reload, and when a wall-clock jump larger than 90
@@ -353,10 +369,11 @@ seconds is observed between two 30-second ticks (the sleep/resume detector; Go's
 does not advance across suspend, so wall-clock comparison is the only signal —
 `gocron` doc §8).
 
-For each enabled job: read `state.lastScheduledAt`, enumerate occurrences in
+For each enabled recurring job: read `state.lastScheduledAt`, enumerate occurrences in
 `(lastScheduledAt, now]` bounded by `catchup_window`, apply the policy, enqueue, and write the new
-`lastScheduledAt` **before** executing anything. A crash mid-pass therefore re-runs at most the
-occurrences it had not yet claimed.
+`lastScheduledAt` **before** executing anything. One-time jobs follow the total rule in §4.1,
+including the skipped record for an Occurrence outside the window or disabled catch-up. A crash
+mid-pass therefore re-runs at most the occurrences it had not yet claimed.
 
 ### 4.3 Overlap
 
@@ -491,7 +508,7 @@ the YAML instead, because a job that has never run has no state worth overriding
 | `failure` | Non-zero exit, or the agent run could not complete. |
 | `timeout` | Killed at `timeout`. |
 | `blocked` | The agent is sitting on an approval or question UI. Terminal, never retried, always notified. |
-| `skipped` | Never executed. `reason` is `overlap`, `limit_exceeded`, `disabled`, `catchup_capped`, or `superseded`. |
+| `skipped` | Never executed. `reason` is `overlap`, `limit_exceeded`, `disabled`, `catchup_capped`, `superseded`, `missed_window`, or `catchup_off`. |
 | `cancelled` | Killed by `cancel_previous`, by shutdown, or by `job cancel`. |
 
 `reason` is a stable machine-readable string, or `null` when there is nothing to add beyond the
@@ -499,7 +516,7 @@ status. It is a single union across all statuses:
 
 | Status | Legal `reason` values |
 | --- | --- |
-| `skipped` | `overlap`, `limit_exceeded`, `disabled`, `catchup_capped`, `superseded` |
+| `skipped` | `overlap`, `limit_exceeded`, `disabled`, `catchup_capped`, `superseded`, `missed_window`, `catchup_off` |
 | `failure` | `daemon_died`, `cwd_missing`, `herdr_unavailable`, `herdr_version_unsupported`, `herdr_unexpected`, `agent_vanished`, `agent_name_collision`, `pane_lost`, `agent_unknown`, `notifier_failed` (never on its own — a notifier failure never sets the status), or `null` for an ordinary non-zero exit |
 | `timeout` | `job_timeout`, `wait_timeout`, `agent_prompt_stalled` |
 | `blocked` | `agent_blocked`, `agent_startup_dialog`, `cwd_not_trusted` |

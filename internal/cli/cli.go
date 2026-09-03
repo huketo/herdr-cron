@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -231,33 +230,10 @@ func validateCmd(g *globals) *cobra.Command {
 	return cmd
 }
 
-// parseScheduleExpr disambiguates the one --schedule flag by shape, so an agent never has
-// to choose between --cron, --every and --at (docs/spec/05-cli.md §3.1).
+// parseScheduleExpr delegates the --schedule shape rules to the same parser used when the
+// expression is written, so validation cannot assign a different schedule form.
 func parseScheduleExpr(expr string, loc *time.Location) (schedule.Spec, string, error) {
-	s := schedule.Spec{Location: loc}
-	switch {
-	case strings.HasPrefix(expr, "@"):
-		s.Cron = expr
-		return s, "cron", nil
-	case looksLikeInstant(expr):
-		s.At = expr
-		return s, "at", nil
-	case !strings.ContainsAny(expr, " \t"):
-		d, err := time.ParseDuration(expr)
-		if err != nil {
-			return s, "", fmt.Errorf("%q is neither a duration nor a cron expression", expr)
-		}
-		s.Every = d
-		return s, "every", nil
-	default:
-		s.Cron = expr
-		return s, "cron", nil
-	}
-}
-
-func looksLikeInstant(v string) bool {
-	_, err := time.Parse(time.RFC3339, v)
-	return err == nil
+	return schedule.ParseExpr(expr, time.Now(), loc)
 }
 
 func validateExpr(g *globals, id, expr, tz string, next int) error {

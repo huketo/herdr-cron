@@ -254,6 +254,27 @@ type ResolvedSchedule struct {
 	JitterSec        int64   `json:"jitterSec"`
 }
 
+// ScheduleAt is the Type value of a one-time schedule: one absolute instant, one Occurrence,
+// and then nothing. It is spelled out here because three packages branch on it.
+const ScheduleAt = "at"
+
+// OneShot reports whether this schedule has exactly one Occurrence in its whole life.
+func (s ResolvedSchedule) OneShot() bool { return s.Type == ScheduleAt }
+
+// Instant is the single Occurrence of a one-time schedule, and the only place At is parsed
+// once config.Load has accepted it. A false result means the schedule is not one-time; it
+// never means the instant was unreadable, because an unparseable At is a load error.
+func (s ResolvedSchedule) Instant() (time.Time, bool) {
+	if !s.OneShot() {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, s.At)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
 // ResolvedRetry is Retry with the defaults substituted and every interval in seconds, so a
 // consumer never has to know that an absent max_attempts means 1.
 type ResolvedRetry struct {
@@ -327,12 +348,28 @@ const (
 	// fault.
 	StatusBlocked Status = "blocked"
 	// StatusSkipped never executed; reason is overlap, limit_exceeded, disabled,
-	// catchup_capped or superseded. Recorded rather than dropped so the gap in the history
-	// has an explanation, and excluded from the runs-per-day count. Never retried.
+	// catchup_capped, superseded, missed_window or catchup_off. Recorded rather than
+	// dropped so the gap in the history has an explanation, and excluded from the
+	// runs-per-day count. Never retried.
 	StatusSkipped Status = "skipped"
 	// StatusCancelled was killed by cancel_previous, by shutdown, or by job cancel; reason
 	// is superseded, shutdown or user. Never retried — the cancellation was the intent.
 	StatusCancelled Status = "cancelled"
+)
+
+// Reasons a scheduler refuses a one-time Occurrence outright. They are constants, unlike the
+// reasons discovered mid-run, because the daemon writes them and the tests assert them: a
+// one-shot that vanished with nothing written is the failure these two values exist to make
+// impossible (docs/spec/03-job-model.md §4.1).
+const (
+	// ReasonMissedWindow is a one-time Occurrence that passed while no scheduler was
+	// running and was already older than the job's catchup_window when one started.
+	ReasonMissedWindow = "missed_window"
+	// ReasonCatchupOff is a one-time Occurrence that passed while no scheduler was running
+	// and whose job set catchup: off. The refusal is the author's own instruction; it is
+	// recorded anyway, because "nothing happened and nobody said why" is the complaint this
+	// product exists to answer.
+	ReasonCatchupOff = "catchup_off"
 )
 
 // Terminal reports whether a status ends a run.

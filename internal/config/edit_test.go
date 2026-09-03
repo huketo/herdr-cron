@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 const authored = `version: 1
@@ -85,8 +86,9 @@ func TestScheduleFormDisambiguation(t *testing.T) {
 		{"17 3 * * 1-5", "cron"},
 		{"30m", "every"},
 		{"2026-12-24T18:00:00+09:00", "at"},
+		{"+2h", "at"},
 	} {
-		form, _, err := scheduleForm(tc.in)
+		form, _, err := scheduleForm(tc.in, time.Local)
 		if err != nil {
 			t.Errorf("%q: %v", tc.in, err)
 			continue
@@ -95,8 +97,27 @@ func TestScheduleFormDisambiguation(t *testing.T) {
 			t.Errorf("%q resolved to %q, want %q", tc.in, form, tc.form)
 		}
 	}
-	if _, _, err := scheduleForm("nonsense"); err == nil {
+	if _, _, err := scheduleForm("nonsense", time.Local); err == nil {
 		t.Error("an unparseable expression must be rejected")
+	}
+}
+
+// A relative one-shot is stored as the instant it resolved to. Storing "+2h" would re-anchor
+// on every reload of jobs.yaml and therefore never arrive.
+func TestRelativeOneShotIsStoredAbsolute(t *testing.T) {
+	form, value, err := scheduleForm("+90m", time.Local)
+	if err != nil {
+		t.Fatalf("scheduleForm: %v", err)
+	}
+	if form != "at" {
+		t.Fatalf("form is %q, want at", form)
+	}
+	got, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("stored value %q is not an RFC 3339 instant: %v", value, err)
+	}
+	if d := time.Until(got); d < 89*time.Minute || d > 91*time.Minute {
+		t.Errorf("stored instant is %s away, want about 90m", d.Round(time.Second))
 	}
 }
 

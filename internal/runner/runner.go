@@ -241,6 +241,43 @@ func environ(extra map[string]string) []string {
 	return env
 }
 
+// RecordSkip writes the one skipped Run record that explains an Occurrence which never
+// executed, and claims that Occurrence with the catch-up watermark so a later reconciliation
+// pass does not record it a second time.
+//
+// RunOnce records its own refusals — overlap, limit_exceeded — because it discovers them
+// after it has decided to run. This is for the refusals decided before any run is attempted,
+// which today means a one-time Occurrence the scheduler arrived too late for
+// (docs/spec/03-job-model.md §4.1). Like every skipped record it leaves lastStatus alone:
+// state.json reports the last outcome that executed, and the explanation for a gap lives in
+// the run history, which is where a reader looks for it.
+func RecordSkip(st *store.Store, job *model.Resolved, scheduledAt time.Time, trigger model.Trigger, reason string) (*model.Run, error) {
+	host, _ := os.Hostname()
+	run := &model.Run{
+		RunID:       model.NewRunID(job.ID, scheduledAt),
+		JobID:       job.ID,
+		Trigger:     trigger,
+		Attempt:     1,
+		ScheduledAt: &scheduledAt,
+		Status:      model.StatusRunning,
+		Host:        host,
+	}
+	run, err := finish(st, run, model.StatusSkipped, &reason, nil, "")
+	if err != nil {
+		return run, err
+	}
+
+	state, err := st.LoadState()
+	if err != nil {
+		return run, err
+	}
+	js := state.Job(job.ID)
+	if js.LastScheduledAt == nil || js.LastScheduledAt.Before(scheduledAt) {
+		js.LastScheduledAt = &scheduledAt
+	}
+	return run, st.SaveState(state)
+}
+
 func finish(st *store.Store, run *model.Run, status model.Status, reason *string, exitCode *int, excerpt string) (*model.Run, error) {
 	now := time.Now()
 	run.Status = status

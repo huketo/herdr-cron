@@ -20,15 +20,22 @@ A Run carries its own `trigger`, `attempt`, timestamps, `status`, `reason`, `log
 
 ### Occurrence
 
-An instant at which a Job's schedule says it should fire. Computed without a scheduler by `schedule.Schedule.Next` / `NextN`, so `validate --schedule` and the daemon can never disagree — both parse through gocron's own cron parser.
+An instant at which a Job's schedule says it should fire. Computed without a scheduler by
+`schedule.Schedule.Next` / `NextN`, so `validate --schedule` and the daemon can never disagree —
+both parse through gocron's own cron parser. An `at` Job has exactly one Occurrence, and Jitter
+never moves it.
 
-An Occurrence is not a Run and a Run is not always an Occurrence: a manual run has no Occurrence (`scheduledAt` is null), and **every Occurrence produces a Run record even when nothing executes**. An Occurrence that was dropped is a Run with status `skipped` and a `reason`. That is the whole answer to "why did my job not run at 03:00", which is the most common complaint about cron.
+An Occurrence is not a Run and a Run is not always an Occurrence: a manual Run has no Occurrence
+(`scheduledAt` is null). Every one-time Occurrence produces a Run record even when nothing
+executes: a missed or policy-refused Occurrence is `skipped` with a `reason`. Once the
+`state.json` watermark reaches that instant, the CLI derives `completed: true`; `jobs.yaml`
+remains authored and unchanged.
 
 ### Run trigger vs. trigger file
 
 One word, two unrelated objects. Say which.
 
-A **run trigger** is provenance on a Run record: `model.Trigger`, one of `scheduler`, `manual`, `catchup`, `retry`, `startup`. It decides whether jitter applies (`scheduler` and `catchup` only) and whether the run counts against a limit.
+A **run trigger** is provenance on a Run record: `model.Trigger`, one of `scheduler`, `manual`, `catchup`, `retry`, `startup`. For recurring schedules it decides whether Jitter applies (`scheduler` and `catchup` only), and it decides whether the Run counts against a limit.
 
 A **trigger file** is the CLI→daemon channel: `daemon.Trigger`, one JSON file written into `<state>/triggers/<ulid>.json` by `job run`, `job cancel` or `reload`, claimed by the daemon **renaming** it to `.claimed`, answered by a `daemon.TriggerResult` written to `.result`. The rename is the claim, which is why double-processing is impossible without a lock. `job pause` and `job resume` deliberately do *not* use this channel — see Override. ADR-0002.
 
@@ -40,9 +47,16 @@ How `run-once` gets invoked. Three of them, interchangeable, changing no job sem
 
 ### Catch-up
 
-What happens to Occurrences that passed while nothing was running — the daemon was down, or the machine slept. `model.Catchup`: `off`, `latest` (default), or `all`, each bounded by `catchup_window` (default 168h).
+What happens to Occurrences that passed while nothing was running — the daemon was down, or the
+machine slept. `model.Catchup`: `off`, `latest` (default), or `all`, each bounded by
+`catchup_window` (default 1h for a one-time Job and 168h otherwise).
 
-`latest` means **exactly one** Run for the most recently missed Occurrence, and everything older is discarded. Twenty seconds of downtime on a five-second job produces one `catchup` run, not four. The rule is copied wholesale from Claude Desktop because it is the only shipping product with the same risk profile: replaying every missed Occurrence is correct for `ffmpeg` and a bill for LLM calls (D3).
+For recurring Jobs, `latest` means **exactly one** Run for the most recently missed Occurrence,
+and everything older is discarded. Twenty seconds of downtime on a five-second Job produces
+one `catchup` Run, not four. For a one-time Job, `latest` and `all` are identical: its single
+Occurrence runs with trigger `catchup` inside the window, becomes `skipped` / `missed_window`
+outside it, or becomes `skipped` / `catchup_off` when catch-up is disabled. Every outcome
+advances the watermark, so the same Occurrence is never reconsidered.
 
 ### Overlap
 
@@ -54,7 +68,7 @@ Enforced by an advisory lock on the job's own history file — `store.TryLockRun
 
 A Run's final `model.Status`: `success`, `no_op`, `failure`, `timeout`, `blocked`, `skipped`, or `cancelled`. `running` is the only non-terminal one, and `Status.Terminal()` is that single sentence in code.
 
-The Terminal outcome is a different field from the Run's captured output, and the two are never conflated: output is evidence, status is the verdict. `reason` is one union across every status — `overlap`, `limit_exceeded`, `disabled`, `catchup_capped`, `superseded`, `cwd_not_trusted`, `daemon_died`, `auto_failures`, and the rest — so a reader parses one enum rather than one per status.
+The Terminal outcome is a different field from the Run's captured output, and the two are never conflated: output is evidence, status is the verdict. `reason` is one union across every status — `overlap`, `limit_exceeded`, `disabled`, `catchup_capped`, `superseded`, `missed_window`, `catchup_off`, `cwd_not_trusted`, `daemon_died`, `auto_failures`, and the rest — so a reader parses one enum rather than one per status. A one-time Job's watermark is spent when its Occurrence is claimed, before the Terminal outcome may exist; `completed` therefore means accounted for, not terminal or successful.
 
 ### Blocked
 
@@ -76,9 +90,14 @@ There is no Homebrew tap and no Scoop bucket. A Front door is not a Driver: the 
 
 ### Jitter
 
-A deterministic per-job offset added to an Occurrence before it fires: `offset = FNV1a64(job.id) mod min(interval/2, 30m)`, surfaced as `ResolvedSchedule.JitterSec` and applied by `schedule.NextN`'s jitter argument.
+A deterministic per-job offset added to a recurring Occurrence before it fires:
+`offset = FNV1a64(job.id) mod min(interval/2, 30m)`, surfaced as
+`ResolvedSchedule.JitterSec` and applied by `schedule.NextN`'s jitter argument.
 
-Deterministic, not random, so the same Job always fires at the same offset and `validate` can tell the truth about it. It is a safety feature, not a nicety: six agent Jobs at `0 9 * * *` would otherwise launch six agents into the same repository in the same second. Applied to `scheduler` and `catchup` run triggers, never to `manual`.
+Deterministic, not random, so the same Job always fires at the same offset and `validate` can
+tell the truth about it. It is a safety feature, not a nicety: six agent Jobs at `0 9 * * *`
+would otherwise launch six agents into the same repository in the same second. Applied to
+`scheduler` and `catchup` Run triggers on recurring Jobs, never to `manual` or an `at` Job.
 
 ### Override
 

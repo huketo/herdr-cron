@@ -86,6 +86,39 @@ herdr-cron run logs nightly-deps-20260901T181700Z --tail 200
 
 위 명령은 모두 stdout에 JSON을 출력합니다. 사람이 읽는 형태가 필요하면 `-o text`를 붙이십시오. 단, 그 출력은 호환성을 약속하지 않습니다.
 
+## 한 번만 실행할 job 예약
+
+현재 시각을 기준으로 지정하려면 `+` 접두사를 쓰고, 시각이 정해져 있으면 RFC 3339
+절대 시각을 지정합니다:
+
+```sh
+herdr-cron job add --id demo-backup --schedule "+2h" --command "..."
+# Or name the absolute instant directly:
+herdr-cron job add --id demo-backup --schedule "2026-12-24T18:00:00+09:00" --command "..."
+```
+
+두 명령은 같은 Job을 만드는 대안입니다. `+2h`는 한 번만 해석되어 절대 시각으로
+저장되지만, `+`가 없는 `2h`는 반복 Job을 만듭니다. 이미 지나간 절대 시각은 usage
+오류로 거부됩니다. 일회성 Job에는 Jitter가 적용되지 않으므로, `job get`에 표시된
+시각에 그대로 실행됩니다.
+
+해당 시각에 daemon이 꺼져 있었다면 기본 1시간 catch-up 창 안의 Occurrence는
+`trigger: "catchup"`으로 실행됩니다. 창보다 오래된 Occurrence는 `missed_window`
+사유가 붙은 `skipped` Run으로 기록되고, `catchup: off`이면 `catchup_off` 사유가
+붙습니다. 놓친 일회성 예약은 무슨 일이 있었는지 설명하는 Run 없이 사라지지 않습니다.
+
+Occurrence가 실행 대상으로 확정되거나 skipped로 기록되면 `job get`과 `job list` 요약이
+`completed: true`를 보고합니다. 이는 하나뿐인 Occurrence가 소진되었다는 뜻이며, Run이
+성공했다는 뜻은 아닙니다. 이 필드는 일회성 Job에서만 나타나고 `state.json`에서
+파생됩니다. herdr-cron은 완료를 표시하려고 `jobs.yaml`을 고치지 않습니다. 히스토리를
+확인한 뒤 정의가 더는 필요하지 않으면 명시적으로 제거합니다:
+
+```sh
+herdr-cron job get demo-backup
+herdr-cron run list --job demo-backup --status all
+herdr-cron job rm demo-backup --yes
+```
+
 ## job은 어떻게 실행됩니까
 
 작업을 실제로 실행하는 원시 명령은 오직 하나입니다:
@@ -214,18 +247,18 @@ job마다 세 가지 일정 형태 중 정확히 하나를 씁니다:
 | --- | --- | --- |
 | `cron` | `cron: "17 3 * * 1-5"` | 5필드 또는 6필드(6필드면 첫 번째가 초). `@daily`, `@hourly`, `@weekly` 같은 descriptor를 허용하고 `@reboot`은 거부합니다. 식 안의 `CRON_TZ=` 접두사가 `timezone` 필드를 이깁니다. |
 | `every` | `every: 30m` | 고정 간격. 스케줄러 시작 시점 또는 `start_at`부터 잽니다. |
-| `at` | `at: 2026-12-24T18:00:00+09:00` | 절대 시각 한 번. 발사된 뒤 job은 완료되며 다시는 스케줄되지 않습니다. |
+| `at` | `at: 2026-12-24T18:00:00+09:00` | 하나의 절대 Occurrence입니다. 실행 대상으로 확정되거나 skipped로 기록되면 `completed`가 `state.json`에서 파생되고 다시는 스케줄되지 않으며, `jobs.yaml`은 바뀌지 않습니다. |
 
-CLI에서는 이 세 형태가 하나의 플래그로 들어가고 모양으로 구분됩니다 — cron 식, descriptor, duration, RFC 3339 시각. 플래그 세 개 중에 고르라고 하면 에이전트는 틀린 것을 고르기 때문입니다.
+CLI에서는 cron 식, descriptor, duration, RFC 3339 절대 시각, `+` 접두사가 붙은 상대 시각이 하나의 플래그로 들어가고 모양으로 구분됩니다. 플래그 세 개 중에 고르라고 하면 에이전트는 틀린 것을 고르기 때문입니다. 상대 시각은 기록할 때 RFC 3339로 정규화됩니다.
 
 ## 안전 기본값
 
 무인으로 돌리기 전에 이 절을 읽으십시오. 아래 기본값은 전부 "돈이 빠르게 새지 않고 천천히 새도록" 고른 값입니다.
 
-- **jitter는 켜져 있습니다(`jitter: auto`).** 오프셋은 `FNV1a64(job.id) mod min(interval/2, 30m)`으로, 결정적입니다. 같은 job은 항상 같은 초에 시작하므로 예측된 다음 실행 시각이 거짓말을 하지 않습니다. `0 9 * * *`에 걸린 에이전트 job 여섯 개가 같은 저장소에 같은 초에 여섯 개의 에이전트를 띄우는 사태를 막기 위해 존재합니다. 수동 실행에는 jitter가 적용되지 않습니다.
+- **반복 Job에서는 jitter가 켜져 있습니다(`jitter: auto`).** 오프셋은 `FNV1a64(job.id) mod min(interval/2, 30m)`으로, 결정적입니다. 같은 Job은 항상 같은 초에 시작하므로 예측된 다음 실행 시각이 거짓말을 하지 않습니다. `0 9 * * *`에 걸린 에이전트 Job 여섯 개가 같은 저장소에 같은 초에 여섯 개의 에이전트를 띄우는 사태를 막기 위해 존재합니다. 수동 실행과 일회성 Job에는 jitter가 적용되지 않으며, `at` 일정은 자신이 지정한 시각에 실행됩니다.
 - **`max_runs_per_day`의 기본값은 에이전트 job이 24, 셸 job이 0(무제한)입니다.** 비대칭은 의도적입니다. 셸 job은 거의 공짜이고 에이전트 job은 아닙니다. 한도를 넘으면 `limit_exceeded` 사유가 붙은 `skipped` run으로 기록되므로, 거절이 조용히 사라지지 않고 히스토리에 남습니다.
 - **`max_consecutive_failures: 3`이면 job이 자동으로 비활성화됩니다.** `failure`·`timeout`·`blocked`가 연속 세 번이면 override가 비활성으로 뒤집히며 `disabledReason: auto_failures`가 기록되고 알림이 발사됩니다. `herdr-cron job resume`이 이를 해제합니다. 이것이 돈을 지키는 회로 차단기이며, 의도적인 발명입니다 — 조사한 어떤 스케줄러에도 없고, 필요했던 두 상용 제품은 나중에 덧붙였습니다.
-- **`catchup: latest`, 창은 168h입니다.** 다운타임 이후 가장 최근에 놓친 발생 하나만 실행하고, 그보다 오래된 것은 버립니다. job별로 `off`와 `all`도 있습니다. 5초 주기 job이 20초 멈췄다면 catch-up run은 네 번이 아니라 한 번입니다. 주말이 지난 노트북을 열었을 때 에이전트 대기열이 저장소 하나로 쏟아지지 않습니다.
+- **`catchup: latest`이며, 창은 일회성 Job이 1h이고 나머지가 168h입니다.** 다운타임 이후 반복 Job은 가장 최근에 놓친 Occurrence 하나만 실행하고, 그보다 오래된 것은 버립니다. Job별로 `off`와 `all`도 있습니다. 5초 주기 Job이 20초 멈췄다면 catch-up Run은 네 번이 아니라 한 번입니다. 창 안의 일회성 Job은 한 번 실행되고, 창 밖이면 `skipped` / `missed_window`로 기록되므로 누락이 조용히 사라지지 않습니다.
 - **`concurrency: skip`.** 이전 run이 아직 돌고 있을 때 도착한 발생은 버려지지 않고 `overlap` 사유의 `skipped` run으로 기록됩니다. 이렇게 기록해 두는 것이 "왜 03시에 이게 안 돌았는가"에 답할 수 있게 만드는 유일한 방법입니다.
 - **모든 에이전트 프롬프트에 preamble이 붙고, 이는 설정할 수 없습니다.** 사용자 텍스트 앞에 그대로 삽입됩니다:
 

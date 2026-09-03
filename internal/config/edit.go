@@ -11,6 +11,8 @@ import (
 
 	"github.com/gofrs/flock"
 	"gopkg.in/yaml.v3"
+
+	"github.com/huketo/herdr-cron/internal/schedule"
 )
 
 // Edit describes a job add or update. A nil field means "leave alone" on update and
@@ -219,7 +221,15 @@ func applyEdit(node *yaml.Node, e Edit) error {
 
 	if e.Schedule != nil {
 		sched := mapEnsure(node, "schedule")
-		form, value, err := scheduleForm(*e.Schedule)
+		loc := time.Local
+		if e.Timezone != nil {
+			resolved, err := schedule.LoadLocation(*e.Timezone)
+			if err != nil {
+				return err
+			}
+			loc = resolved
+		}
+		form, value, err := scheduleForm(*e.Schedule, loc)
 		if err != nil {
 			return err
 		}
@@ -275,27 +285,22 @@ func applyEdit(node *yaml.Node, e Edit) error {
 	return nil
 }
 
-// scheduleForm disambiguates the single --schedule flag by shape
-// (docs/spec/05-cli.md §3.1).
-func scheduleForm(expr string) (form, value string, err error) {
-	switch {
-	case strings.HasPrefix(expr, "@"):
-		return "cron", expr, nil
-	case isRFC3339(expr):
-		return "at", expr, nil
-	case !strings.ContainsAny(expr, " \t"):
-		if _, err := time.ParseDuration(expr); err != nil {
-			return "", "", fmt.Errorf("%q is neither a duration nor a cron expression", expr)
-		}
-		return "every", expr, nil
-	default:
-		return "cron", expr, nil
+// scheduleForm resolves the single --schedule expression to the jobs.yaml key that carries it
+// and the text to write there. The shape rules live in schedule.ParseExpr; only the two
+// answers this file needs are derived here.
+//
+// A relative one-shot is stored as the absolute instant it resolved to, never as "+2h". The
+// author's text is otherwise preserved verbatim, so "30m" stays "30m" rather than becoming
+// "30m0s" on a round trip through a duration.
+func scheduleForm(expr string, loc *time.Location) (form, value string, err error) {
+	spec, form, err := schedule.ParseExpr(expr, time.Now(), loc)
+	if err != nil {
+		return "", "", err
 	}
-}
-
-func isRFC3339(v string) bool {
-	_, err := time.Parse(time.RFC3339, v)
-	return err == nil
+	if form == schedule.FormAt {
+		return form, spec.At, nil
+	}
+	return form, expr, nil
 }
 
 // ---------------------------------------------------------------- node helpers

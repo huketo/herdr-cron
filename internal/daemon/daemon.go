@@ -68,6 +68,7 @@ type Daemon struct {
 	started time.Time
 
 	mu        sync.Mutex
+	oneShotMu sync.Mutex
 	ctx       context.Context
 	loaded    *config.Loaded
 	configErr *string
@@ -138,6 +139,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	d.rebuild()
 	d.catchUp(ctx)
+	d.reconcileOneShots(ctx)
 	sched.Start()
 
 	var wg sync.WaitGroup
@@ -238,7 +240,13 @@ func (d *Daemon) rebuild() {
 		return
 	}
 	want := map[string]*model.Resolved{}
+	now := time.Now()
 	for _, j := range d.enabledJobs() {
+		if at, ok := j.Schedule.Instant(); ok && !at.After(now) {
+			// Reconciliation, not gocron, decides whether a past one-time
+			// Occurrence runs or is recorded as skipped.
+			continue
+		}
 		want[j.ID] = j
 	}
 
@@ -320,9 +328,9 @@ func definition(j *model.Resolved) (gocron.JobDefinition, error) {
 	case "every":
 		return gocron.DurationJob(time.Duration(j.Schedule.EverySec) * time.Second), nil
 	case "at":
-		t, err := time.Parse(time.RFC3339, j.Schedule.At)
-		if err != nil {
-			return nil, err
+		t, ok := j.Schedule.Instant()
+		if !ok {
+			return nil, fmt.Errorf("invalid one-time schedule %q", j.Schedule.At)
 		}
 		return gocron.OneTimeJob(gocron.OneTimeJobStartDateTime(t)), nil
 	default:
@@ -430,6 +438,9 @@ func (d *Daemon) catchUp(ctx context.Context) {
 	now := time.Now()
 
 	for _, j := range d.enabledJobs() {
+		if j.Schedule.OneShot() {
+			continue
+		}
 		if j.Schedule.Catchup == model.CatchupOff {
 			continue
 		}
@@ -460,6 +471,74 @@ func (d *Daemon) catchUp(ctx context.Context) {
 			// Catch-up runs are serialised, never parallel.
 			d.execute(ctx, j, runner.Options{Trigger: model.TriggerCatchup, ScheduledAt: at})
 		}
+	}
+}
+
+// reconcileOneShots settles one-time Occurrences that are already in the past, and is the only
+// place that can: gocron refuses to register a OneTimeJob whose instant has gone, and the
+// recurring replay path has no pattern to enumerate for a schedule with exactly one
+// Occurrence. Without it a one-shot missed by an hour of downtime left an error line on every
+// reload and no Run record at all — the one gap this product exists to explain
+// (docs/spec/03-job-model.md §4.1, ADR-0006).
+//
+// It is serialised because the start pass, the sleep detector and the reload watcher all call
+// it: two concurrent passes would either run the same Occurrence twice or lose each other's
+// watermark.
+func (d *Daemon) reconcileOneShots(ctx context.Context) {
+	d.oneShotMu.Lock()
+	defer d.oneShotMu.Unlock()
+
+	for _, j := range d.enabledJobs() {
+		if ctx.Err() != nil {
+			return
+		}
+		if !j.Schedule.OneShot() {
+			continue
+		}
+		at, ok := j.Schedule.Instant()
+		if !ok {
+			continue
+		}
+		now := time.Now()
+		if at.After(now) {
+			continue
+		}
+
+		// Read for each job because executing or recording the previous one replaced
+		// state.json, and this decision must observe the newest watermarks.
+		state, err := d.store.LoadState()
+		if err != nil {
+			d.log.Error("cannot read state.json", "error", err)
+			return
+		}
+		if store.OneShotCompleted(j, state.Jobs[j.ID]) {
+			continue
+		}
+
+		reason := ""
+		switch {
+		case j.Schedule.Catchup == model.CatchupOff:
+			reason = model.ReasonCatchupOff
+		case now.Sub(at) > time.Duration(j.Schedule.CatchupWindowSec)*time.Second:
+			reason = model.ReasonMissedWindow
+		}
+		if reason != "" {
+			if _, err := runner.RecordSkip(d.store, j, at, model.TriggerCatchup, reason); err != nil {
+				d.log.Error("cannot record skipped one-time job",
+					"job", j.ID, "scheduledAt", at.Format(time.RFC3339),
+					"reason", reason, "error", err)
+				continue
+			}
+			d.log.Warn("one-time job skipped",
+				"job", j.ID, "scheduledAt", at.Format(time.RFC3339), "reason", reason)
+			continue
+		}
+
+		// latest and all are identical when the schedule has only one Occurrence.
+		d.execute(ctx, j, runner.Options{
+			Trigger:     model.TriggerCatchup,
+			ScheduledAt: at,
+		})
 	}
 }
 
@@ -597,6 +676,9 @@ func (d *Daemon) watchLoop(ctx context.Context) {
 			d.log.Info("reloading jobs.yaml")
 			d.reload()
 			d.rebuild()
+			// A one-time agent run can take long enough that doing this inline would
+			// stop jobs.yaml changes from being observed until the run finishes.
+			go d.reconcileOneShots(ctx)
 		}
 	}
 }
@@ -616,6 +698,7 @@ func (d *Daemon) clockLoop(ctx context.Context) {
 				d.log.Info("wall clock jumped; reconciling",
 					"gap", now.Sub(last).Round(time.Second).String())
 				d.catchUp(ctx)
+				d.reconcileOneShots(ctx)
 			}
 			last = now
 		}
