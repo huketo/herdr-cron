@@ -250,6 +250,12 @@ herdr plugin unlink huketo.herdr-cron
 
 ## Opening a pull request
 
+`main` is protected by a repository ruleset: a direct push is refused with `GH013`, the
+branch cannot be force-pushed or deleted, and **squash is the only merge method**. No
+approval and no status check is required — a solo maintainer can merge their own pull
+request, and a required check would deadlock every release
+([ADR-0005](docs/adr/0005-main-is-protected-by-a-ruleset.md)).
+
 - Branch from `main`.
 - Keep the change focused; one logical change per PR.
 - Run `make check`.
