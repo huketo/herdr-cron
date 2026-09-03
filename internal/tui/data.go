@@ -31,6 +31,7 @@ type JobView struct {
 	Enabled             bool
 	EnabledSource       string
 	AutoDisabled        bool
+	Completed           bool
 	NextRunAt           time.Time
 	NextRuns            []time.Time
 	ConsecutiveFailures int
@@ -86,12 +87,13 @@ func Load(roots paths.Roots) Snapshot {
 	}
 
 	for _, j := range loaded.Jobs {
-		v := JobView{Job: j}
+		js := state.Jobs[j.ID]
+		v := JobView{Job: j, Completed: j.Schedule.OneShot() && store.OneShotCompleted(j, js)}
 		v.Enabled, v.EnabledSource = store.EffectiveEnabled(j.Enabled, ov.Overrides[j.ID])
 		if o := ov.Overrides[j.ID]; o != nil && o.Reason == "auto_failures" && !v.Enabled {
 			v.AutoDisabled = true
 		}
-		if js := state.Jobs[j.ID]; js != nil {
+		if js != nil {
 			v.ConsecutiveFailures = js.ConsecutiveFailures
 			if js.RunsToday != nil && js.RunsToday.Date == time.Now().Format("2006-01-02") {
 				v.RunsToday = js.RunsToday.Count

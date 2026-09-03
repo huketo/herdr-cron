@@ -12,6 +12,7 @@ import (
 
 	"github.com/huketo/herdr-cron/internal/config"
 	"github.com/huketo/herdr-cron/internal/model"
+	"github.com/huketo/herdr-cron/internal/schedule"
 	"github.com/huketo/herdr-cron/internal/store"
 )
 
@@ -36,6 +37,7 @@ type jobSummary struct {
 	Enabled             bool                   `json:"enabled"`
 	EnabledSource       string                 `json:"enabledSource"`
 	Schedule            model.ResolvedSchedule `json:"schedule"`
+	Completed           *bool                  `json:"completed,omitempty"`
 	Tags                []string               `json:"tags"`
 	NextRunAt           *string                `json:"nextRunAt"`
 	LastRun             *lastRun               `json:"lastRun"`
@@ -52,6 +54,7 @@ type lastRun struct {
 type jobResult struct {
 	Type       string          `json:"type"`
 	Job        *model.Resolved `json:"job"`
+	Completed  *bool           `json:"completed,omitempty"`
 	NextRuns   []string        `json:"nextRuns"`
 	RecentRuns []*model.Run    `json:"recentRuns"`
 }
@@ -186,6 +189,10 @@ func summarise(j *model.Resolved, enabled bool, src string, js *store.JobState) 
 		Enabled: enabled, EnabledSource: src,
 		Schedule: j.Schedule, Tags: j.Tags,
 	}
+	if j.Schedule.OneShot() {
+		completed := store.OneShotCompleted(j, js)
+		s.Completed = &completed
+	}
 	if runs := nextRuns(j, 1); len(runs) > 0 {
 		s.NextRunAt = &runs[0]
 	}
@@ -228,7 +235,7 @@ func jobGetCmd(g *globals) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			id := "cli:job:get"
-			loaded, st, _, ov, err := g.loadAll(id)
+			loaded, st, state, ov, err := g.loadAll(id)
 			if err != nil {
 				return err
 			}
@@ -238,13 +245,19 @@ func jobGetCmd(g *globals) *cobra.Command {
 					ExitError, nil)
 			}
 			j.Enabled, j.EnabledSource = store.EffectiveEnabled(j.Enabled, ov.Overrides[j.ID])
+			var completed *bool
+			if j.Schedule.OneShot() {
+				value := store.OneShotCompleted(j, state.Jobs[j.ID])
+				completed = &value
+			}
 
 			runs, err := st.Runs(j.ID)
 			if err != nil {
 				return failure(id, "io_error", err.Error(), ExitError, nil)
 			}
 			emit(os.Stdout, g, Envelope{ID: id, Result: jobResult{
-				Type: "job", Job: j, NextRuns: nextRuns(j, 5), RecentRuns: tail(runs, 10),
+				Type: "job", Job: j, Completed: completed,
+				NextRuns: nextRuns(j, 5), RecentRuns: tail(runs, 10),
 			}})
 			return nil
 		},
@@ -263,7 +276,7 @@ func tail[T any](v []T, n int) []T {
 
 func jobAddCmd(g *globals, update bool) *cobra.Command {
 	var e config.Edit
-	var name, description, schedule, timezone, catchup, concurrency, cwd, timeout string
+	var name, description, scheduleExpr, timezone, catchup, concurrency, cwd, timeout string
 	var command, prompt, agentKind, session, noOpMarker string
 	var env, tags []string
 	var maxAttempts, maxRunsPerDay int
@@ -298,8 +311,37 @@ func jobAddCmd(g *globals, update bool) *cobra.Command {
 			if !update && command == "" && prompt == "" {
 				return failure(id, "usage", "one of --command or --prompt is required", ExitUsage, nil)
 			}
-			if !update && schedule == "" {
+			if !update && scheduleExpr == "" {
 				return failure(id, "usage", "--schedule is required", ExitUsage, nil)
+			}
+			loc, err := schedule.LoadLocation(timezone)
+			if err != nil {
+				return failure(id, "usage", err.Error(), ExitUsage, nil)
+			}
+			if scheduleExpr != "" {
+				now := time.Now()
+				spec, form, err := schedule.ParseExpr(scheduleExpr, now, loc)
+				if err != nil {
+					return failure(id, "usage", err.Error(), ExitUsage, nil)
+				}
+				if form == schedule.FormAt {
+					at, err := time.Parse(time.RFC3339, spec.At)
+					if err != nil {
+						return failure(id, "usage", err.Error(), ExitUsage, nil)
+					}
+					// A one-shot in the past is refused rather than written: it has no
+					// Occurrence left to fire, so it would sit in jobs.yaml as a job that
+					// never runs and never explains itself.
+					if !at.After(now) {
+						msg := fmt.Sprintf(
+							"scheduled instant %q has already passed (now %s); for a relative instant, use --schedule \"+2h\"",
+							spec.At, now.In(loc).Format(time.RFC3339))
+						return failure(id, "usage", msg, ExitUsage, nil)
+					}
+					// Store the instant, never the relative text: jobs.yaml is re-read on
+					// every reload, so a stored "+2h" would re-anchor and never arrive.
+					scheduleExpr = spec.At
+				}
 			}
 
 			bind := func(flag string, dst **string, src *string) {
@@ -317,8 +359,8 @@ func jobAddCmd(g *globals, update bool) *cobra.Command {
 			bind("agent-kind", &e.AgentKind, &agentKind)
 			bind("session", &e.Session, &session)
 			bind("no-op-marker", &e.NoOpMarker, &noOpMarker)
-			if schedule != "" {
-				e.Schedule = &schedule
+			if scheduleExpr != "" {
+				e.Schedule = &scheduleExpr
 			}
 			if command != "" {
 				e.Command = &command
@@ -393,7 +435,7 @@ func jobAddCmd(g *globals, update bool) *cobra.Command {
 	}
 	f.StringVar(&name, "name", "", "display name")
 	f.StringVar(&description, "description", "", "description")
-	f.StringVar(&schedule, "schedule", "", "cron expression, @descriptor, duration, or RFC 3339 instant")
+	f.StringVar(&scheduleExpr, "schedule", "", "cron expression, @descriptor, duration, or RFC 3339 instant")
 	f.StringVar(&timezone, "timezone", "", "IANA timezone")
 	f.StringVar(&catchup, "catchup", "", "off | latest | all")
 	f.StringVar(&concurrency, "concurrency", "", "skip | queue | cancel_previous | allow")

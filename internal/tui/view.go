@@ -190,11 +190,15 @@ func (m *Model) syncJobs() {
 		if v.Running {
 			run = cellText{"…", styleInfo}
 		}
+		next := countdownCell(v.NextRunAt)
+		if v.Completed {
+			next = cellText{"completed", styleOK}
+		}
 		rows = append(rows, []cellText{
 			enabledCell(v),
 			text(orID(v.Job.Name, v.Job.ID)),
 			text(v.ScheduleText()),
-			countdownCell(v.NextRunAt),
+			next,
 			statusCell(v.Last),
 			run,
 		})
@@ -248,7 +252,10 @@ func detailText(v JobView) string {
 	line("jitter", fmt.Sprintf("%ds", j.Schedule.JitterSec))
 	line("catchup", string(j.Schedule.Catchup))
 	line("enabled", fmt.Sprintf("%v (source: %s)", v.Enabled, v.EnabledSource))
-	if len(v.NextRuns) > 0 {
+	switch {
+	case v.Completed:
+		line("next", styleOK.Render("completed"))
+	case len(v.NextRuns) > 0:
 		var next []string
 		for _, t := range v.NextRuns {
 			next = append(next, t.Format("01-02 15:04:05"))
