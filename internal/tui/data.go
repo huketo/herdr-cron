@@ -165,20 +165,7 @@ func daemonView(roots paths.Roots) DaemonView {
 }
 
 func nextRuns(j *model.Resolved, n int) []time.Time {
-	loc, err := schedule.LoadLocation(j.Schedule.Timezone)
-	if err != nil {
-		return nil
-	}
-	spec := schedule.Spec{Location: loc}
-	switch j.Schedule.Type {
-	case "cron":
-		spec.Cron = j.Schedule.Expression
-	case "every":
-		spec.Every = time.Duration(j.Schedule.EverySec) * time.Second
-	case "at":
-		spec.At = j.Schedule.At
-	}
-	sch, err := schedule.Parse(spec)
+	sch, err := schedule.FromResolved(j.Schedule)
 	if err != nil {
 		return nil
 	}

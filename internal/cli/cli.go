@@ -275,7 +275,7 @@ func validateFile(g *globals, id string, next int) error {
 		res.Warnings = []config.Issue{}
 	}
 	for _, j := range loaded.Jobs {
-		sch, err := scheduleFor(j)
+		sch, err := schedule.FromResolved(j.Schedule)
 		if err != nil {
 			continue
 		}
@@ -287,23 +287,6 @@ func validateFile(g *globals, id string, next int) error {
 	}
 	emit(os.Stdout, g, Envelope{ID: id, Result: res})
 	return nil
-}
-
-func scheduleFor(j *model.Resolved) (*schedule.Schedule, error) {
-	loc, err := schedule.LoadLocation(j.Schedule.Timezone)
-	if err != nil {
-		return nil, err
-	}
-	spec := schedule.Spec{Location: loc}
-	switch j.Schedule.Type {
-	case "cron":
-		spec.Cron = j.Schedule.Expression
-	case "every":
-		spec.Every = time.Duration(j.Schedule.EverySec) * time.Second
-	case "at":
-		spec.At = j.Schedule.At
-	}
-	return schedule.Parse(spec)
 }
 
 // runResult is the `run` payload of docs/spec/05-cli.md §2.
