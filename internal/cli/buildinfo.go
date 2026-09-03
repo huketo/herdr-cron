@@ -36,7 +36,7 @@ type BuildInfo struct {
 // .release-please-manifest.json. A test asserts they agree, because a
 // mismatch means an annotation stopped matching and every plugin build now
 // reports a version it is not.
-const fallbackVersion = "0.2.0" // x-release-please-version
+const fallbackVersion = "0.2.1" // x-release-please-version
 
 // devVersion is what main.go carries when no linker stamp was applied.
 const devVersion = "dev"
