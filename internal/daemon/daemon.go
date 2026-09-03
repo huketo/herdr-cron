@@ -138,13 +138,20 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.sched = sched
 
 	d.rebuild()
+
+	var wg sync.WaitGroup
+	// The heartbeat starts before anything runs. Liveness is the lock plus the heartbeat,
+	// the lock is already held, and a catch-up run of a kind: agent job can take minutes —
+	// long enough for `daemon --detach` to give up waiting and call a healthy start a
+	// failure, and for `status` to report a running daemon as stopped (issue #13).
+	wg.Add(1)
+	go func() { defer wg.Done(); d.heartbeatLoop(ctx) }()
+
 	d.catchUp(ctx)
 	d.reconcileOneShots(ctx)
 	sched.Start()
 
-	var wg sync.WaitGroup
-	wg.Add(4)
-	go func() { defer wg.Done(); d.heartbeatLoop(ctx) }()
+	wg.Add(3)
 	go func() { defer wg.Done(); d.watchLoop(ctx) }()
 	go func() { defer wg.Done(); d.triggerLoop(ctx) }()
 	go func() { defer wg.Done(); d.clockLoop(ctx) }()

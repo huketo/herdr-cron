@@ -177,9 +177,7 @@ Ordered steps; each MUST complete before the next.
 3. **Close out orphaned `running` records** — one with no terminal partner and no live process
    becomes `status: "failure"`, `reason: "daemon_died"` (`04-storage.md` §5); GC trigger files
    older than 5 minutes (`04-storage.md` §8 step 4).
-4. **Reconciliation pass** — `03-job-model.md` §4.2, `trigger: "startup"` or `"catchup"`, writing
-   `lastScheduledAt` before anything executes.
-5. **Build the scheduler.**
+4. **Build the scheduler** and register every enabled job.
 
 ```go
 sched, err := gocron.NewScheduler(
@@ -235,10 +233,17 @@ job, err := sched.NewJob(                     // NewJob(JobDefinition, Task, ...
   `Shutdown` returns a non-nil `Job` and a `nil` error** while scheduling nothing" (`gocron` §2),
   so the daemon MUST track scheduler liveness itself.
 
-6. **`sched.Start()`** — blocks briefly and returns "once scheduling is live, not before";
+5. **Start the heartbeat** — atomic rewrite of `daemon.json` every 15 s, `driver` set to `daemon`
+   or `foreground`. It precedes anything that executes a job: liveness is the lock plus the
+   heartbeat (`04-storage.md` §7), the lock is already held, and a catch-up run of a `kind: agent`
+   job can take minutes — long enough for `daemon --detach` to stop waiting and call a healthy
+   start a failure while `status` reports the running daemon as stopped.
+6. **Reconciliation pass** — `03-job-model.md` §4.2, `trigger: "startup"` or `"catchup"`, writing
+   `lastScheduledAt` before anything executes.
+7. **`sched.Start()`** — blocks briefly and returns "once scheduling is live, not before";
    `NextRun()` is zero until then, and a second call logs a warning and returns (`gocron` §2).
-7. **Start the heartbeat** — atomic rewrite of `daemon.json` every 15 s, `driver` set to `daemon`
-   or `foreground`.
+8. **Start the watchers** — fsnotify plus the 5-second stat poll on `jobs.yaml` and `triggers/`,
+   and the 30-second clock watch that detects sleep and resume (`03-job-model.md` §4.2).
 
 ### 3.2 Mandatory listener rules
 
