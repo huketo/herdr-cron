@@ -688,6 +688,14 @@ func (d *Daemon) watchLoop(ctx context.Context) {
 	}
 }
 
+// wallElapsed is the wall-clock duration between two instants. time.Time.Sub uses the
+// monotonic reading when both values have one, and that reading does not advance across
+// suspend, so a 47-minute sleep still looks like one 30s tick (docs/spec/03-job-model.md
+// §4.2). Round(0) strips the monotonic reading.
+func wallElapsed(now, last time.Time) time.Duration {
+	return now.Round(0).Sub(last.Round(0))
+}
+
 // clockLoop detects sleep: Go's monotonic clock does not advance across suspend, so a
 // wall-clock jump is the only signal (docs/spec/03-job-model.md §4.2).
 func (d *Daemon) clockLoop(ctx context.Context) {
@@ -699,11 +707,14 @@ func (d *Daemon) clockLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			if now.Sub(last) > sleepThreshold {
+			if gap := wallElapsed(now, last); gap > sleepThreshold {
 				d.log.Info("wall clock jumped; reconciling",
-					"gap", now.Sub(last).Round(time.Second).String())
+					"gap", gap.Round(time.Second).String())
 				d.catchUp(ctx)
 				d.reconcileOneShots(ctx)
+				// gocron's timers also freeze across suspend; refresh them so the
+				// next occurrence is scheduled from wall now rather than firing late.
+				d.rebuild()
 			}
 			last = now
 		}
