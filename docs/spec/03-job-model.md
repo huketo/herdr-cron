@@ -369,6 +369,10 @@ seconds is observed between two 30-second ticks (the sleep/resume detector; Go's
 does not advance across suspend, so wall-clock comparison is the only signal —
 `gocron` doc §8).
 
+On wake, refresh the scheduler's pending timers before executing catch-up Runs. Those timers
+may still carry the suspend delay, and catch-up executes Jobs synchronously. Deferring the
+refresh until those Runs finish can discard an Occurrence that became due during recovery.
+
 For each enabled recurring job: read `state.lastScheduledAt`, enumerate occurrences in
 `(lastScheduledAt, now]` bounded by `catchup_window`, apply the policy, enqueue, and write the new
 `lastScheduledAt` **before** executing anything. One-time jobs follow the total rule in §4.1,
