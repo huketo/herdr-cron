@@ -710,15 +710,20 @@ func (d *Daemon) clockLoop(ctx context.Context) {
 			if gap := wallElapsed(now, last); gap > sleepThreshold {
 				d.log.Info("wall clock jumped; reconciling",
 					"gap", gap.Round(time.Second).String())
-				d.catchUp(ctx)
-				d.reconcileOneShots(ctx)
-				// gocron's timers also freeze across suspend; refresh them so the
-				// next occurrence is scheduled from wall now rather than firing late.
-				d.rebuild()
+				d.recoverFromSleep(ctx)
 			}
 			last = now
 		}
 	}
+}
+
+func (d *Daemon) recoverFromSleep(ctx context.Context) {
+	// Refresh frozen timers before catch-up: both reconciliation passes execute
+	// Jobs synchronously. Rebuilding afterwards can discard an Occurrence that
+	// came due while another Job was running.
+	d.rebuild()
+	d.catchUp(ctx)
+	d.reconcileOneShots(ctx)
 }
 
 // ------------------------------------------------------------- trigger files
