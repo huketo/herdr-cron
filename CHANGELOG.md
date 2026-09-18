@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/huketo/herdr-cron/compare/v0.2.2...v0.2.3) (2026-09-18)
+
+
+### Bug fixes
+
+* **daemon:** compare wall clocks when detecting suspend ([#22](https://github.com/huketo/herdr-cron/issues/22)) ([ce767e8](https://github.com/huketo/herdr-cron/commit/ce767e8aeb366766902728773d89a6bd4e19cfa8))
+
 ## [0.2.2](https://github.com/huketo/herdr-cron/compare/v0.2.1...v0.2.2) (2026-09-03)
 
 
