@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/huketo/herdr-cron/compare/v0.2.3...v0.2.4) (2026-10-20)
+
+
+### Bug fixes
+
+* **tui:** delete the cursor job with d from the job list ([#26](https://github.com/huketo/herdr-cron/issues/26)) ([397c0b1](https://github.com/huketo/herdr-cron/commit/397c0b16367a5392e3575e5edc19b3270cdf4735))
+
 ## [0.2.3](https://github.com/huketo/herdr-cron/compare/v0.2.2...v0.2.3) (2026-09-18)
 
 
