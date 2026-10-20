@@ -336,3 +336,38 @@ func TestDeleteAsksFirst(t *testing.T) {
 		t.Error("clicking the scrim did not dismiss the modal")
 	}
 }
+
+// `d` is advertised in the job list's help, so it must delete the job under the
+// cursor there too — not only from the detail screen.
+func TestDeleteKeyFromJobListTargetsTheCursorJob(t *testing.T) {
+	m := newSized(t, 110, 32)
+	if m.screen != screenJobs || len(m.snap.Jobs) < 2 {
+		t.Fatalf("fixture must start on the job list with two jobs: screen %v, %d jobs", m.screen, len(m.snap.Jobs))
+	}
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	m = asModel(t, updated)
+	target := m.cursorJob()
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	m = asModel(t, updated)
+	if m.modal == nil {
+		t.Fatal("d on the job list did not ask to delete")
+	}
+	if !strings.Contains(m.modal.body, target) {
+		t.Fatalf("the confirmation names the wrong job: %q, want %q", m.modal.body, target)
+	}
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = asModel(t, updated)
+	if cmd == nil {
+		t.Fatal("confirming the deletion did nothing")
+	}
+	cmd()
+	body, err := os.ReadFile(m.roots.JobsFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "id: "+target) {
+		t.Fatalf("%s is still in jobs.yaml after confirming", target)
+	}
+}

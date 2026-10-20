@@ -406,6 +406,9 @@ func (m *Model) keyJobs(msg tea.KeyPressMsg) tea.Cmd {
 		return m.runNow(m.cursorJob())
 	case key.Matches(msg, m.keys.Cancel):
 		return m.cancelRun(m.cursorJob())
+	case key.Matches(msg, m.keys.Delete):
+		m.openDeleteModal(m.cursorJob())
+		return nil
 	}
 	m.moveFocused(msg)
 	return nil
